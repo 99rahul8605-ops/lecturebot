@@ -20,6 +20,26 @@ function createBot({token,webUrl,ownerId}) {
         await query('INSERT INTO group_members(group_id,telegram_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[group.rows[0].id,id]);
         return bot.sendMessage(msg.chat.id,'✅ Joined '+escapeHtml(group.rows[0].name)+'! Open the learning app to study with your group.',{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'📚 Open Learning App',web_app:{url:webUrl}}]]}});
       }
+      if(/^pack_[a-f0-9]{24}$/.test(arg)){
+        const key=arg.slice(5);
+        const result=await query("UPDATE delivery_jobs SET consumed_at=now() WHERE id=$1 AND telegram_id=$2 AND consumed_at IS NULL AND expires_at>now() RETURNING *",[key,id]);
+        const job=result.rows[0];
+        if(!job)return bot.sendMessage(msg.chat.id,'This delivery request has expired, was used already, or belongs to another user.');
+        const {rows}=await query(`SELECT l.id,l.title,l.telegram_video_id,l.telegram_notes_id,b.is_published,(b.is_premium OR l.is_premium) AS premium,(a.telegram_id IS NOT NULL) AS access FROM lectures l JOIN chapters c ON c.id=l.chapter_id JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id LEFT JOIN batch_access a ON a.batch_id=b.id AND a.telegram_id=$2 AND (a.expires_at IS NULL OR a.expires_at>now()) WHERE l.id=ANY($1::uuid[])`,[job.lecture_ids,id]);
+        const byId=new Map(rows.map(r=>[r.id,r]));
+        await bot.sendMessage(msg.chat.id,'📦 Sending '+job.lecture_ids.length+' selected '+(job.media_type==='lec'?'lectures':'PDF notes')+'…');
+        let sent=0,failed=0;
+        for(const lectureId of job.lecture_ids){
+          const lecture=byId.get(lectureId),file=lecture&&(job.media_type==='lec'?lecture.telegram_video_id:lecture.telegram_notes_id);
+          if(!lecture||(!lecture.is_published&&id!==ownerId)||(lecture.premium&&!lecture.access&&id!==ownerId)||!file){failed++;continue}
+          try{
+            if(job.media_type==='lec')await bot.sendVideo(msg.chat.id,file,{caption:lecture.title,protect_content:true});
+            else await bot.sendDocument(msg.chat.id,file,{caption:'📄 '+lecture.title});
+            sent++;
+          }catch(error){failed++;console.error('Bulk delivery error:',error.message)}
+        }
+        return bot.sendMessage(msg.chat.id,'✅ Delivered: '+sent+' / '+job.lecture_ids.length+(failed?' · Failed/unavailable: '+failed:''));
+      }
       if(/^lec_[a-f0-9-]{36}$/.test(arg)){
         const {rows}=await query(`SELECT l.title,l.telegram_video_id,l.is_premium,b.is_premium AS batch_premium,b.id AS batch_id FROM lectures l JOIN chapters c ON c.id=l.chapter_id JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id WHERE l.id=$1 AND b.is_published=true`,[arg.slice(4)]);
         const lec=rows[0]; if(!lec)return bot.sendMessage(msg.chat.id,'Lecture not found.');
