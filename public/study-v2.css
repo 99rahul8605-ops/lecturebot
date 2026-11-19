@@ -47,3 +47,16 @@
 .v2-study-subject{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:12px}.v2-study-subject button{border:0;border-radius:30px;padding:13px 12px;background:#25221b;color:#f4f1ea;font-weight:800;font-size:11px;min-width:0}.v2-study-subject span{color:#aca899;font-weight:700;font-size:11px}
 .v2-study-controls{display:flex;gap:8px}.v2-study-action{border:0;background:#d4f25c;border-radius:50px;flex:1;padding:17px 8px;font-size:14px;font-weight:850}.v2-study-stop{border:0;background:#323028;border-radius:50px;flex:1;padding:17px 8px;color:#e7e4dc;font-weight:800;font-size:13px}.v2-study-controls button:disabled{opacity:.4}
 .v2-study-room{width:100%;display:flex;align-items:center;gap:11px;border:0;background:#25221b;color:#f4f1ea;border-radius:21px;padding:14px;text-align:left}.v2-study-room>span:first-child{font-size:27px}.v2-study-room>span:nth-child(2){display:flex;flex:1;flex-direction:column;gap:5px}.v2-study-room b{font-size:12px}.v2-study-room small{font-size:11px;color:#b5afa2}
+
+/* Lecture / notes bottom-sheet popup from original screens */
+.v2-media-dialog{border:0;padding:0;max-width:440px;width:min(100%,440px);max-height:85dvh;position:fixed;inset:auto 0 0 0;margin:0 auto;border-radius:28px 28px 0 0;background:#faf8f1;color:#17150f;box-shadow:0 -10px 70px #0004}
+.v2-media-dialog::backdrop{background:rgba(0,0,0,.57)}
+.v2-media-sheet{padding:23px 18px max(22px,env(safe-area-inset-bottom));overflow-y:auto;max-height:85dvh}
+.v2-media-sheet .v2-head h2{font-size:22px;margin-top:5px}
+.v2-icon-button{border:0;background:#eeebe0;border-radius:50%;width:40px;height:40px;font-size:24px;display:grid;place-items:center;flex:none}
+.v2-media-list{max-height:44dvh;overflow-y:auto;display:flex;flex-direction:column;gap:7px}
+.v2-media-row{width:100%;border:1px solid #ede9df;border-radius:16px;background:#fff;text-align:left;display:flex;align-items:center;gap:10px;padding:12px}
+.v2-media-row.selected{background:#e9f6c6;border-color:#bed97b}.v2-media-row:disabled{opacity:.54}
+.v2-media-number{border-radius:12px;background:#f0eee8;width:30px;height:34px;display:grid;place-items:center;font-size:11px;font-weight:800}
+.v2-media-row>span:nth-child(2){flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}.v2-media-row b{font-size:12px;overflow:hidden;text-overflow:ellipsis}.v2-media-row small{font-size:10px;color:#80796e}.v2-media-row strong{font-size:18px}
+.v2-media-sheet .v2-wide{position:sticky;bottom:0}
