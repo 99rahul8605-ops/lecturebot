@@ -96,7 +96,7 @@ async function resolveOwnerSavedMedia(value,kind){
    return {fileId:raw,mediaType:kind==='video'?'video':'document'};
  }
  if(!botName||parsed[1].toLowerCase()!==botName.toLowerCase())throw new Error('Link belongs to another bot; forward media to this test bot instead');
- const {rows}=await query('SELECT f.telegram_file_id,f.file_type,r.media_kind FROM saved_telegram_files f JOIN auto_save_receipts r ON r.file_code=f.code WHERE f.code=$1 AND f.telegram_id=$2 ORDER BY r.saved_at DESC LIMIT 1',[parsed[2],OWNER_ID]);
+ const {rows}=await query('SELECT f.telegram_file_id,f.file_type,f.media_kind FROM saved_telegram_files f WHERE f.code=$1 AND f.telegram_id=$2',[parsed[2],OWNER_ID]);
  const file=rows[0];if(!file||file.media_kind!==(kind==='video'?'video':'pdf'))throw new Error('Saved link not found or wrong media type');
  return {fileId:file.telegram_file_id,mediaType:file.file_type};
 }
