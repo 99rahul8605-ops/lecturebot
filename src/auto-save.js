@@ -46,7 +46,7 @@ async function nextChapter(ownerId) {
     if(!locked.rows[0]?.is_active)return {error:'Auto Save is OFF'};
     const current=locked.rows[0].chapter_id;
     const {rows}=await c.query(
-      'SELECT nextc.id,nextc.title FROM chapters curr JOIN chapters nextc ON nextc.subject_id=curr.subject_id WHERE curr.id=$1 AND (nextc.sort_order,nextc.id)>(curr.sort_order,curr.id) ORDER BY nextc.sort_order,nextc.id LIMIT 1',
+      'SELECT nextc.id,nextc.title FROM chapters curr JOIN chapters nextc ON nextc.subject_id=curr.subject_id WHERE curr.id=$1 AND (nextc.sort_order,nextc.title,nextc.id)>(curr.sort_order,curr.title,curr.id) ORDER BY nextc.sort_order,nextc.title,nextc.id LIMIT 1',
       [current]
     );
     if(!rows[0])return {error:'This is the last chapter in the subject'};
