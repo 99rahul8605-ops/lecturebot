@@ -102,6 +102,7 @@ async function processAutoSave(message,ownerId) {
   if(!media||!Number.isSafeInteger(message.message_id))return null;
   const owner=String(ownerId),chatId=String(message.chat.id),msgId=message.message_id;
   return transaction(async c=>{
+    await c.query('INSERT INTO app_users(telegram_id,first_name,last_name,username) VALUES($1,$2,$3,$4) ON CONFLICT(telegram_id) DO NOTHING',[owner,String(message.from.first_name||''),String(message.from.last_name||''),String(message.from.username||'')]);
     const {rows}=await c.query("SELECT a.chapter_id,a.unit_id,a.is_active,c.title AS chapter_title,u.title AS unit_title,s.title AS subject_title,b.title AS batch_title FROM auto_save_sessions a JOIN chapters c ON c.id=a.chapter_id LEFT JOIN units u ON u.id=a.unit_id JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id WHERE a.telegram_id=$1 FOR UPDATE OF a",[owner]);
     const session=rows[0];
     const dup=await c.query('SELECT 1 FROM auto_save_receipts WHERE telegram_id=$1 AND chat_id=$2 AND message_id=$3',[owner,chatId,msgId]);
