@@ -16,7 +16,7 @@ function createBot({token,webUrl,ownerId}) {
       }
       if(/^file_[a-zA-Z0-9_-]{16}$/.test(arg)){
         const code=arg.slice(5);
-        const {rows}=await query("SELECT f.code,f.telegram_file_id,f.file_type,f.file_name,f.telegram_id AS uploader,r.lecture_id,l.telegram_video_id,l.telegram_notes_id,b.is_published,(b.is_premium OR l.is_premium) AS premium,b.id AS batch_id FROM saved_telegram_files f LEFT JOIN auto_save_receipts r ON r.file_code=f.code AND r.is_undone=false LEFT JOIN lectures l ON l.id=r.lecture_id LEFT JOIN chapters c ON c.id=l.chapter_id LEFT JOIN subjects s ON s.id=c.subject_id LEFT JOIN batches b ON b.id=s.batch_id WHERE f.code=$1 ORDER BY r.saved_at DESC LIMIT 1",[code]);
+        const {rows}=await query("SELECT f.code,f.telegram_file_id,f.file_type,f.file_name,f.telegram_id AS uploader,r.lecture_id,l.telegram_video_id,l.telegram_video_type,l.telegram_notes_id,b.is_published,(b.is_premium OR l.is_premium) AS premium,b.id AS batch_id FROM saved_telegram_files f LEFT JOIN auto_save_receipts r ON r.file_code=f.code AND r.is_undone=false LEFT JOIN lectures l ON l.id=r.lecture_id LEFT JOIN chapters c ON c.id=l.chapter_id LEFT JOIN subjects s ON s.id=c.subject_id LEFT JOIN batches b ON b.id=s.batch_id WHERE f.code=$1 ORDER BY r.saved_at DESC LIMIT 1",[code]);
         const file=rows[0];
         if(!file)return bot.sendMessage(msg.chat.id,'File not found.');
         if(id!==ownerId){
@@ -50,7 +50,7 @@ function createBot({token,webUrl,ownerId}) {
           const lecture=byId.get(lectureId),file=lecture&&(job.media_type==='lec'?lecture.telegram_video_id:lecture.telegram_notes_id);
           if(!lecture||(!lecture.is_published&&id!==ownerId)||(lecture.premium&&!lecture.access&&id!==ownerId)||!file){failed++;continue}
           try{
-            if(job.media_type==='lec')await bot.sendVideo(msg.chat.id,file,{caption:lecture.title,protect_content:true});
+            if(job.media_type==='lec'){if(lecture.telegram_video_type==='document')await bot.sendDocument(msg.chat.id,file,{caption:lecture.title,protect_content:true});else await bot.sendVideo(msg.chat.id,file,{caption:lecture.title,protect_content:true});}
             else await bot.sendDocument(msg.chat.id,file,{caption:'📄 '+lecture.title});
             sent++;
           }catch(error){failed++;console.error('Bulk delivery error:',error.message)}
@@ -58,12 +58,12 @@ function createBot({token,webUrl,ownerId}) {
         return bot.sendMessage(msg.chat.id,'✅ Delivered: '+sent+' / '+job.lecture_ids.length+(failed?' · Failed/unavailable: '+failed:''));
       }
       if(/^lec_[a-f0-9-]{36}$/.test(arg)){
-        const {rows}=await query(`SELECT l.title,l.telegram_video_id,l.is_premium,b.is_premium AS batch_premium,b.id AS batch_id FROM lectures l JOIN chapters c ON c.id=l.chapter_id JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id WHERE l.id=$1 AND b.is_published=true`,[arg.slice(4)]);
+        const {rows}=await query(`SELECT l.title,l.telegram_video_id,l.telegram_video_type,l.is_premium,b.is_premium AS batch_premium,b.id AS batch_id FROM lectures l JOIN chapters c ON c.id=l.chapter_id JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id WHERE l.id=$1 AND b.is_published=true`,[arg.slice(4)]);
         const lec=rows[0]; if(!lec)return bot.sendMessage(msg.chat.id,'Lecture not found.');
         const paid=lec.is_premium||lec.batch_premium;
         if(paid && id!==ownerId){const access=await query('SELECT 1 FROM batch_access WHERE telegram_id=$1 AND batch_id=$2 AND (expires_at IS NULL OR expires_at>now())',[id,lec.batch_id]);if(!access.rowCount)return bot.sendMessage(msg.chat.id,'🔒 Premium lecture. Purchase or request access inside the app.');}
         if(!lec.telegram_video_id)return bot.sendMessage(msg.chat.id,'Lecture video not uploaded yet.');
-        return bot.sendVideo(msg.chat.id,lec.telegram_video_id,{caption:lec.title,protect_content:true});
+        return lec.telegram_video_type==='document'?bot.sendDocument(msg.chat.id,lec.telegram_video_id,{caption:lec.title,protect_content:true}):bot.sendVideo(msg.chat.id,lec.telegram_video_id,{caption:lec.title,protect_content:true});
       }
       if(/^note_[a-f0-9-]{36}$/.test(arg)){
         const {rows}=await query(`SELECT l.title,l.telegram_notes_id,l.is_premium,b.is_premium AS batch_premium,b.id AS batch_id FROM lectures l JOIN chapters c ON c.id=l.chapter_id JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id WHERE l.id=$1 AND b.is_published=true`,[arg.slice(5)]);
