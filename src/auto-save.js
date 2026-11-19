@@ -109,7 +109,7 @@ async function processAutoSave(message,ownerId) {
     if(dup.rowCount)return {kind:'duplicate'};
     const code=crypto.randomBytes(12).toString('base64url');
     const fileType=media.fileType||(media.kind==='pdf'?'document':'video');
-    await c.query('INSERT INTO saved_telegram_files(code,telegram_id,telegram_file_id,file_type,file_name) VALUES($1,$2,$3,$4,$5)',[code,owner,media.fileId,fileType,safeFileName(media.fileName)]);
+    await c.query('INSERT INTO saved_telegram_files(code,telegram_id,telegram_file_id,file_type,media_kind,file_name) VALUES($1,$2,$3,$4,$5,$6)',[code,owner,media.fileId,fileType,media.kind,safeFileName(media.fileName)]);
     // Match the old bot: uploads still receive a link when Auto Mode is OFF.
     // A free-standing file is owner-only until explicitly associated with a published lecture.
     if(!session?.is_active){
