@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS saved_telegram_files(
  telegram_id text NOT NULL REFERENCES app_users(telegram_id) ON DELETE CASCADE,
  telegram_file_id text NOT NULL,
  file_type text NOT NULL CHECK(file_type IN ('video','document','photo','audio','voice','video_note')),
+ media_kind text NOT NULL DEFAULT 'video' CHECK(media_kind IN ('video','pdf')),
  file_name text NOT NULL DEFAULT '',
  created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -19,3 +20,5 @@ CREATE UNIQUE INDEX IF NOT EXISTS auto_save_receipts_file_code_idx ON auto_save_
 
 -- Preserve original Telegram media type for uploads sent as documents.
 ALTER TABLE lectures ADD COLUMN IF NOT EXISTS telegram_video_type text NOT NULL DEFAULT 'video' CHECK(telegram_video_type IN ('video','document'));
+
+ALTER TABLE saved_telegram_files ADD COLUMN IF NOT EXISTS media_kind text NOT NULL DEFAULT 'video' CHECK(media_kind IN ('video','pdf'));
