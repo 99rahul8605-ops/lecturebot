@@ -12,8 +12,6 @@ function classifyMedia(msg) {
     if(mime==='application/pdf'||name.endsWith('.pdf'))return {kind:'pdf',fileId:msg.document.file_id,fileName:msg.document.file_name||'notes.pdf'};
     if(mime.startsWith('video/')||/\.(mp4|mkv|mov|webm|avi)$/.test(name))return {kind:'video',fileId:msg.document.file_id,fileName:msg.document.file_name||'video.mp4'};
   }
-  if(msg.photo?.length){const p=msg.photo.at(-1);return {kind:'video',fileId:p.file_id,fileName:'photo.jpg',fileType:'photo'};}
-  if(msg.audio?.file_id)return {kind:'video',fileId:msg.audio.file_id,fileName:msg.audio.file_name||'audio.mp3',fileType:'audio'};
   return null;
 }
 const autoTitle=(_msg,n)=>'Lecture '+n;
