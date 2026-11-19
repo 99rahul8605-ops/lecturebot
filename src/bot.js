@@ -1,7 +1,7 @@
 'use strict';
 const TelegramBot=require('node-telegram-bot-api');
 const {query}=require('./db');
-const {processAutoSave,getAutoSaveStatus,stopAutoSave,nextChapter,undoAutoSave,fileLink}=require('./auto-save');
+const {processAutoSave,getAutoSaveStatus,stopAutoSave,nextChapter,nextUnit,undoAutoSave,fileLink}=require('./auto-save');
 function createBot({token,webUrl,ownerId}) {
   if(!token) throw new Error('BOT_TOKEN required');
   const bot=new TelegramBot(token,{polling:false});
@@ -89,9 +89,9 @@ function createBot({token,webUrl,ownerId}) {
         await bot.sendMessage(msg.chat.id,'ℹ️ <b>No empty Notes slots found.</b>\nEvery lecture here already has notes (or no video lecture exists).\n\n📁 Saved PDF: '+escapeHtml(result.fileName)+'\n🔗 <code>'+link+'</code>\n\nNo lecture was overwritten. Send videos first, then resend the PDF if you want to attach it.',{parse_mode:'HTML'});
         return;
       }
-      const location=[result.batch,result.subject,result.chapter].map(escapeHtml).join(' › ');
+      const location=[result.batch,result.subject,result.chapter,result.unit].filter(Boolean).map(escapeHtml).join(' › ');
       if(result.kind==='video'){
-        await bot.sendMessage(msg.chat.id,'✅ <b>Auto-Saved!</b>\n📖 <b>'+escapeHtml(result.title)+'</b>\n📁 '+escapeHtml(result.fileName)+'\n📍 '+location+'\n🔗 <code>'+link+'</code>\n\n▶️ Next: <b>Lecture '+result.nextLecture+'</b>\n📎 Next PDF → '+escapeHtml(result.nextMissingNotes||'No missing notes')+'\n↩️ /undo · ➡️ /nextchapter · ⏹ /autosavestop',{parse_mode:'HTML'});
+        await bot.sendMessage(msg.chat.id,'✅ <b>Auto-Saved!</b>\n📖 <b>'+escapeHtml(result.title)+'</b>\n📁 '+escapeHtml(result.fileName)+'\n📍 '+location+'\n🔗 <code>'+link+'</code>\n\n▶️ Next: <b>Lecture '+result.nextLecture+'</b>\n📎 Next PDF → '+escapeHtml(result.nextMissingNotes||'No missing notes')+'\n↩️ /undo · ➡️ /nextchapter · ➡️ /nextunit · ⏹ /autosavestop',{parse_mode:'HTML'});
       }else{
         await bot.sendMessage(msg.chat.id,'📎 <b>Notes Attached!</b>\n📖 <b>'+escapeHtml(result.title)+'</b> (#'+result.lectureNumber+')\n📁 '+escapeHtml(result.fileName)+'\n📍 '+location+'\n🔗 <code>'+link+'</code>\n\n'+(result.nextMissingNotes?'📨 Next PDF → '+escapeHtml(result.nextMissingNotes):'✅ All existing lecture notes are filled')+'\n↩️ /undo · ➡️ /nextchapter',{parse_mode:'HTML'});
       }
@@ -128,7 +128,7 @@ function createBot({token,webUrl,ownerId}) {
     try{
       const a=await getAutoSaveStatus(ownerId);
       await bot.sendMessage(msg.chat.id,a.is_active
-        ? '✅ <b>Auto Mode ACTIVE</b>\n📍 '+[a.batch_title,a.subject_title,a.chapter_title].map(escapeHtml).join(' › ')+'\n▶️ Next: Lecture '+a.next_lecture_number+'\n📎 Missing notes: '+a.missing_notes+'\n📊 This session: '+a.saved_videos+' videos, '+a.saved_pdfs+' PDFs'
+        ? '✅ <b>Auto Mode ACTIVE</b>\n📍 '+[a.batch_title,a.subject_title,a.chapter_title,a.unit_title].filter(Boolean).map(escapeHtml).join(' › ')+'\n▶️ Next: Lecture '+a.next_lecture_number+'\n📎 Missing notes: '+a.missing_notes+'\n📊 This session: '+a.saved_videos+' videos, '+a.saved_pdfs+' PDFs'
         : '⏹ Auto Mode OFF. Open Mini App → Admin → Auto Save.',{parse_mode:'HTML'});
     }catch(e){console.error(e.message)}
   });
@@ -146,7 +146,7 @@ function createBot({token,webUrl,ownerId}) {
   });
   bot.onText(/^\/nextunit$/,async msg=>{
     if(msg.chat.type!=='private'||String(msg.from?.id)!==String(ownerId))return;
-    await bot.sendMessage(msg.chat.id,'⚠️ Units are not yet implemented in V2. Use /nextchapter or select a chapter in Admin → Auto Save.');
+    try{const r=await nextUnit(ownerId);await bot.sendMessage(msg.chat.id,r.error?'⚠️ '+r.error:'➡️ <b>Next unit:</b> '+escapeHtml(r.unit_title)+'\n▶️ Next: Lecture '+r.next_lecture_number,{parse_mode:'HTML'});}catch(e){console.error('Next unit:',e.message);await bot.sendMessage(msg.chat.id,'Could not move to the next unit.').catch(()=>{})}
   });
   return bot;
 }
