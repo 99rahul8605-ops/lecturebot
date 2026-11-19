@@ -1,6 +1,7 @@
 'use strict';
 const TelegramBot=require('node-telegram-bot-api');
 const {query}=require('./db');
+const {processAutoSave,getAutoSaveStatus,stopAutoSave}=require('./auto-save');
 function createBot({token,webUrl,ownerId}) {
   if(!token) throw new Error('BOT_TOKEN required');
   const bot=new TelegramBot(token,{polling:false});
@@ -57,6 +58,30 @@ function createBot({token,webUrl,ownerId}) {
       }
       await bot.sendMessage(msg.chat.id,`📚 <b>EduBot Next — Test Version</b>\n\nWelcome ${escapeHtml(u.first_name||'Student')}! Explore subjects, chapters, lectures and PDF notes.`,{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'📚 Open Learning App',web_app:{url:webUrl}}],[{text:'📤 Share with Friends',url:`https://t.me/share/url?url=${encodeURIComponent(`https://t.me/${(await bot.getMe()).username}?start=ref_${id}`)}`}]]}});
     }catch(err){console.error('start handler:',err.message);await bot.sendMessage(msg.chat.id,'Temporary error, please retry.').catch(()=>{});}
+  });
+  // Auto Save is owner-only, private-chat-only, and requires an active chapter
+  // chosen through the authenticated Mini App admin panel.
+  bot.on('message',async msg=>{
+    if(String(msg.from?.id)!==String(ownerId)||msg.chat?.type!=='private')return;
+    try{
+      const result=await processAutoSave(msg,ownerId);
+      if(!result)return;
+      if(result.kind==='duplicate')return; // Telegram retry: already persisted
+      if(result.kind==='no_lecture')return bot.sendMessage(msg.chat.id,'⚠️ PDF not saved. No lecture without notes exists in '+result.chapter+'. Send videos first; this PDF can be resent later.');
+      if(result.kind==='video')return bot.sendMessage(msg.chat.id,'✅ Auto saved video: '+result.title+'\n📂 '+result.chapter);
+      if(result.kind==='pdf')return bot.sendMessage(msg.chat.id,'📄 PDF attached: '+result.title+'\n📂 '+result.chapter);
+    }catch(err){
+      console.error('Auto Save failed:',err.message);
+      await bot.sendMessage(msg.chat.id,'❌ Auto Save failed. This item was not confirmed saved. Try again or check Admin → Auto Save.').catch(()=>{});
+    }
+  });
+  bot.onText(/^\/autosavestatus$/,async msg=>{
+    if(msg.chat.type!=='private'||String(msg.from?.id)!==String(ownerId))return;
+    try{const a=await getAutoSaveStatus(ownerId);await bot.sendMessage(msg.chat.id,a.is_active?'✅ Auto Save ON: '+a.batch_title+' / '+a.subject_title+' / '+a.chapter_title+'\nVideos: '+a.saved_videos+' · PDFs: '+a.saved_pdfs:'⏹ Auto Save is OFF. Open Mini App → Admin → Auto Save to choose a chapter.');}catch(e){console.error(e.message)}
+  });
+  bot.onText(/^\/autosavestop$/,async msg=>{
+    if(msg.chat.type!=='private'||String(msg.from?.id)!==String(ownerId))return;
+    try{const a=await stopAutoSave(ownerId);await bot.sendMessage(msg.chat.id,'⏹ Auto Save stopped. Videos: '+(a?.saved_videos||0)+' · PDFs: '+(a?.saved_pdfs||0));}catch(e){console.error(e.message)}
   });
   return bot;
 }
