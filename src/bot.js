@@ -5,6 +5,18 @@ const {processAutoSave,getAutoSaveStatus,stopAutoSave,nextChapter,nextUnit,undoA
 function createBot({token,webUrl,ownerId}) {
   if(!token) throw new Error('BOT_TOKEN required');
   const bot=new TelegramBot(token,{polling:false});
+  async function sendMedia(chatId,fileId,type,caption,protectedVideo=false){
+    const opts={caption,protect_content:protectedVideo};
+    switch(type){
+      case 'video': return bot.sendVideo(chatId,fileId,opts);
+      case 'photo': return bot.sendPhoto(chatId,fileId,opts);
+      case 'audio': return bot.sendAudio(chatId,fileId,opts);
+      case 'voice': return bot.sendVoice(chatId,fileId,opts);
+      case 'video_note': return bot.sendVideoNote(chatId,fileId,{protect_content:protectedVideo});
+      default: return bot.sendDocument(chatId,fileId,opts);
+    }
+  }
+
   bot.onText(/^\/start(?:\s+(.*))?$/,async(msg,match)=>{
     if(msg.chat.type!=='private')return;
     const u=msg.from,id=String(u.id),arg=String(match?.[1]||'');
@@ -27,8 +39,7 @@ function createBot({token,webUrl,ownerId}) {
           }
         }
         const caption=file.file_name.slice(0,900);
-        if(file.file_type==='video')return bot.sendVideo(msg.chat.id,file.telegram_file_id,{caption,protect_content:true});
-        return bot.sendDocument(msg.chat.id,file.telegram_file_id,{caption});
+        return sendMedia(msg.chat.id,file.telegram_file_id,file.file_type,caption,true);
       }
       if(/^grp_[a-f0-9]{16}$/.test(arg)){
         const inviteCode=arg.slice(4);
@@ -50,7 +61,7 @@ function createBot({token,webUrl,ownerId}) {
           const lecture=byId.get(lectureId),file=lecture&&(job.media_type==='lec'?lecture.telegram_video_id:lecture.telegram_notes_id);
           if(!lecture||(!lecture.is_published&&id!==ownerId)||(lecture.premium&&!lecture.access&&id!==ownerId)||!file){failed++;continue}
           try{
-            if(job.media_type==='lec'){if(lecture.telegram_video_type==='document')await bot.sendDocument(msg.chat.id,file,{caption:lecture.title,protect_content:true});else await bot.sendVideo(msg.chat.id,file,{caption:lecture.title,protect_content:true});}
+            if(job.media_type==='lec')await sendMedia(msg.chat.id,file,lecture.telegram_video_type,lecture.title,true);
             else await bot.sendDocument(msg.chat.id,file,{caption:'📄 '+lecture.title});
             sent++;
           }catch(error){failed++;console.error('Bulk delivery error:',error.message)}
@@ -63,7 +74,7 @@ function createBot({token,webUrl,ownerId}) {
         const paid=lec.is_premium||lec.batch_premium;
         if(paid && id!==ownerId){const access=await query('SELECT 1 FROM batch_access WHERE telegram_id=$1 AND batch_id=$2 AND (expires_at IS NULL OR expires_at>now())',[id,lec.batch_id]);if(!access.rowCount)return bot.sendMessage(msg.chat.id,'🔒 Premium lecture. Purchase or request access inside the app.');}
         if(!lec.telegram_video_id)return bot.sendMessage(msg.chat.id,'Lecture video not uploaded yet.');
-        return lec.telegram_video_type==='document'?bot.sendDocument(msg.chat.id,lec.telegram_video_id,{caption:lec.title,protect_content:true}):bot.sendVideo(msg.chat.id,lec.telegram_video_id,{caption:lec.title,protect_content:true});
+        return sendMedia(msg.chat.id,lec.telegram_video_id,lec.telegram_video_type,lec.title,true);
       }
       if(/^note_[a-f0-9-]{36}$/.test(arg)){
         const {rows}=await query(`SELECT l.title,l.telegram_notes_id,l.is_premium,b.is_premium AS batch_premium,b.id AS batch_id FROM lectures l JOIN chapters c ON c.id=l.chapter_id JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id WHERE l.id=$1 AND b.is_published=true`,[arg.slice(5)]);
@@ -85,6 +96,10 @@ function createBot({token,webUrl,ownerId}) {
       if(!result||result.kind==='duplicate')return;
       const botName=(await bot.getMe()).username;
       const link=fileLink(botName,result.code);
+      if(result.kind==='file'){
+        await bot.sendMessage(msg.chat.id,'✅ <b>File Saved!</b>\n📁 '+escapeHtml(result.fileName)+'\n🔗 <code>'+link+'</code>\n\nAuto Mode OFF. File link is currently owner-only until attached to a published lecture.',{parse_mode:'HTML'});
+        return;
+      }
       if(result.kind==='no_lecture'){
         await bot.sendMessage(msg.chat.id,'ℹ️ <b>No empty Notes slots found.</b>\nEvery lecture here already has notes (or no video lecture exists).\n\n📁 Saved PDF: '+escapeHtml(result.fileName)+'\n🔗 <code>'+link+'</code>\n\nNo lecture was overwritten. Send videos first, then resend the PDF if you want to attach it.',{parse_mode:'HTML'});
         return;
