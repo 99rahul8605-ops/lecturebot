@@ -4,6 +4,59 @@
 
 This is a completely new Node.js + Telegram Mini App + managed PostgreSQL project. It is deliberately NOT deployed, NOT connected to the live bot token, and NOT connected to existing production SQLite/MongoDB.
 
+## V2 UI + Study Groups Test Deployment (2026-11-19)
+
+The current test repository now contains **dedicated Mini App views** for Admin content forms, Study Timer (Pomodoro, Stopwatch and Custom display), Global Room, Study Groups, New Group, Group Timers, Group Chat, Group Management, Study Plan, Subject Picker, Study Stats, and multi-select Lectures/Notes popup. Actual data comes from the separate Supabase test database; no fictitious sample students are rendered.
+
+### REQUIRED SQL migrations BEFORE restarting the updated Node server
+
+After the existing `sql/001_initial.sql` is installed, run **in this exact order** in your **TEST Supabase project** SQL Editor:
+
+1. `sql/002_study_groups_features.sql` — adds group invite codes, settings, co-admins, moderation, study opt-in and indexes.
+2. `sql/003_bulk_delivery.sql` — creates 15-minute, one-use Telegram delivery job records.
+
+Both SQL files are additive and safe to rerun. **Do not run against old production databases**.
+
+### Restart on isolated /lecturebot test installation
+
+```bash
+cd /lecturebot
+git pull origin main
+npm install
+npm test
+npm run check
+screen -S edubot_v2 -X quit 2>/dev/null || true
+screen -dmS edubot_v2 bash -c 'cd /lecturebot && NODE_USE_SYSTEM_CA=1 npm start'
+sleep 2
+curl -sS http://127.0.0.1:8080/api/health
+```
+
+Check port 8080 above against the actual **listening port in the logs** (the container may force PORT=8080 despite .env setting 3102); make sure the Cloudflare test tunnel targets the same port. The certificate is still verified using DATABASE_CA_CERT if required. Do not commit .env or test bot token.
+
+### What the new group/study screens do
+
+- Group membership and chat history live in PostgreSQL. Group owners can make up to 3 co-admins, configure chat mode/slow mode, mute, and pin/delete messages.
+- Global Room is **opt-in** (off by default); group live timers use group settings. Refreshes periodically. Metrics show actual test database results, possibly zero.
+- A study session's start/end are stored in PostgreSQL. Pomodoro and Custom focus modes show client-side countdowns; reaching zero **does not automatically end** the server-timed session. Tap Finish to save.
+- Day calculation for plans/stats uses the India timezone (Asia/Kolkata); an active session is capped to 12 hours in summary calculations to prevent abandoned timers from growing indefinitely.
+- Multiple videos or PDFs are queued via one-use, user-bound 15-minute delivery links. Up to 25 items per request. Test bot only supports **Telegram file IDs already uploaded to that same bot**. No production file IDs have been migrated.
+- Admin Add Batch, Subject, Chapter and Lecture are separate in-app screens with Back, not far-down-the-page forms.
+
+### Remaining pre-production work
+
+The UI is a closer functional interpretation of the supplied reference, but **not yet pixel-perfect across all 18 reference screens**. Rewards spin, real payment/premium administration, complete unit hierarchy, advanced study analytics, Telegram media upload workflows and legacy data migration still need implementation. These tests do **not** certify production launch, payment security or load capacity.
+
+### Safe testing
+
+- Use only a NEW test bot token and separate test Supabase project.
+- Do not stop, rename, or update the existing production CA Inter bot/repo/tunnel.
+- Keep Cloudflare Quick Tunnel HTTPS URL aligned with test WEB_URL. Quick Tunnel URL can change on reconnect.
+- Verify owner account matches OWNER_ID to see Admin.
+- Test 2 separate Telegram accounts for group creation, invite, chat and moderation.
+- Do not disable PostgreSQL certificate verification.
+
+---
+
 ## What's implemented
 
 - Cream + lime / black UI inspired by the supplied 18-screen EduBot prototype.
