@@ -67,9 +67,9 @@ function createBot({token,webUrl,ownerId}) {
       const result=await processAutoSave(msg,ownerId);
       if(!result)return;
       if(result.kind==='duplicate')return; // Telegram retry: already persisted
-      if(result.kind==='no_lecture')return bot.sendMessage(msg.chat.id,'⚠️ PDF not saved. No lecture without notes exists in '+result.chapter+'. Send videos first; this PDF can be resent later.');
-      if(result.kind==='video')return bot.sendMessage(msg.chat.id,'✅ Auto saved video: '+result.title+'\n📂 '+result.chapter);
-      if(result.kind==='pdf')return bot.sendMessage(msg.chat.id,'📄 PDF attached: '+result.title+'\n📂 '+result.chapter);
+      if(result.kind==='no_lecture'){await bot.sendMessage(msg.chat.id,'⚠️ PDF not saved. No lecture without notes exists in '+result.chapter+'. Send videos first; this PDF can be resent later.');return;}
+      if(result.kind==='video'){await bot.sendMessage(msg.chat.id,'✅ Auto saved video: '+result.title+'\n📂 '+result.chapter);return;}
+      if(result.kind==='pdf'){await bot.sendMessage(msg.chat.id,'📄 PDF attached: '+result.title+'\n📂 '+result.chapter);return;}
     }catch(err){
       console.error('Auto Save failed:',err.message);
       await bot.sendMessage(msg.chat.id,'❌ Auto Save failed. This item was not confirmed saved. Try again or check Admin → Auto Save.').catch(()=>{});
