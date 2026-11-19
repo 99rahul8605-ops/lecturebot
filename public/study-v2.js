@@ -143,3 +143,33 @@ v2e('studyStart').onclick=()=>setPage('study-pick');
 // Keep full group UI refreshed when realtime messages arrive.
 v2UpdateTimerDisplay();
 setInterval(()=>{if(state.page==='group-detail'&&v2.groupTab==='timers')v2LoadDetail().catch(()=>{});if(state.page==='global-room')v2LoadGlobal().catch(()=>{})},20000);
+
+const v2Media={chapterId:null,items:[],tab:'lec',selected:new Set()};
+async function v2ShowChapterMedia(id,title){
+ v2Media.chapterId=id;v2Media.selected.clear();v2Media.tab='lec';
+ v2e('v2MediaTitle').textContent=title||'Chapter';
+ v2e('v2MediaSubject').textContent='LECTURES & CLASS NOTES';
+ v2Media.items=await api('/chapters/'+encodeURIComponent(id)+'/lectures');
+ v2RenderMedia();
+ const d=v2e('v2MediaDialog');
+ if(typeof d.showModal==='function')d.showModal();else d.setAttribute('open','');
+}
+function v2RenderMedia(){
+ const kind=v2Media.tab,usable=v2Media.items.filter(x=>!x.locked&&(kind==='lec'?x.has_video:x.has_notes));
+ document.querySelectorAll('[data-mediatab]').forEach(x=>x.classList.toggle('active',x.dataset.mediatab===kind));
+ v2e('v2MediaCount').textContent=kind==='lec'?v2Media.items.length+' lectures · tap to select':usable.length+' notes · tap to select';
+ v2e('v2MediaList').innerHTML=v2Media.items.filter(x=>kind==='lec'||x.has_notes).map((x,i)=>{
+  const allowed=!x.locked&&(kind==='lec'?x.has_video:x.has_notes);
+  const selected=v2Media.selected.has(x.id);
+  return '<button type="button" class="v2-media-row '+(selected?'selected':'')+'" data-v2media="'+v2esc(x.id)+'" '+(allowed?'':'disabled')+'><span class="v2-media-number">'+(i+1)+'</span><span><b>'+v2esc(x.title)+'</b><small>'+(x.locked?'🔒 Premium':allowed?(kind==='lec'?'Lecture video':'PDF notes'):'Coming soon')+'</small></span><strong>'+(selected?'✓':'○')+'</strong></button>';
+ }).join('')||'<div class="empty">No '+(kind==='lec'?'lectures':'notes')+' available.</div>';
+ const n=v2Media.selected.size;v2e('v2MediaSend').disabled=n===0||n>25;
+ v2e('v2MediaSend').textContent='Send '+n+' '+(kind==='lec'?'lecture':'note')+(n===1?'':'s')+' to bot ↗';
+}
+document.querySelectorAll('[data-mediatab]').forEach(b=>b.addEventListener('click',()=>{v2Media.tab=b.dataset.mediatab;v2Media.selected.clear();v2RenderMedia()}));
+v2e('v2MediaClose').onclick=()=>v2e('v2MediaDialog').close();
+v2e('v2MediaAll').onclick=()=>{v2Media.selected=new Set(v2Media.items.filter(x=>!x.locked&&(v2Media.tab==='lec'?x.has_video:x.has_notes)).slice(0,25).map(x=>x.id));v2RenderMedia()};
+v2e('v2MediaClear').onclick=()=>{v2Media.selected.clear();v2RenderMedia()};
+v2e('v2MediaList').onclick=e=>{const btn=e.target.closest('[data-v2media]');if(!btn||btn.disabled)return;const id=btn.dataset.v2media;if(v2Media.selected.has(id))v2Media.selected.delete(id);else if(v2Media.selected.size>=25)return toast('Maximum 25 at once');else v2Media.selected.add(id);v2RenderMedia()};
+v2e('v2MediaSend').onclick=async()=>{if(!v2Media.selected.size)return;try{const r=await api('/deliveries',{method:'POST',body:JSON.stringify({kind:v2Media.tab,lectureIds:[...v2Media.selected]})});v2e('v2MediaDialog').close();if(tg?.openTelegramLink)tg.openTelegramLink(r.url);else window.open(r.url,'_blank','noopener');toast('Request sent to test bot')}catch(e){toast(e.message)}};
+v2e('v2MediaDialog').addEventListener('click',e=>{if(e.target===v2e('v2MediaDialog'))v2e('v2MediaDialog').close()});
