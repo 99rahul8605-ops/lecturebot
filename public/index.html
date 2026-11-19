@@ -80,6 +80,12 @@
  <div class="admin-form hidden" data-admin-section="coupons"><h3>Coupons</h3><p class="muted">Coupon creation and redemption will be added with server-side checks before launch.</p></div>
  <div class="admin-form hidden" data-admin-section="permissions"><h3>Admins & permissions</h3><p class="muted">Only the configured OWNER_ID can access this test panel. Delegated admin roles are not enabled.</p></div>
  </div></section>
+ <dialog id="v2MediaDialog" class="v2-media-dialog"><div class="v2-media-sheet">
+ <div class="v2-head"><div><div class="eyebrow" id="v2MediaSubject">STUDY LIBRARY</div><h2 id="v2MediaTitle">Chapter</h2></div><button id="v2MediaClose" class="v2-icon-button" aria-label="Close">×</button></div>
+ <div class="v2-tabs"><button type="button" data-mediatab="lec" class="active">Lectures</button><button type="button" data-mediatab="note">Notes</button></div>
+ <div class="v2-head"><span class="muted" id="v2MediaCount">Select lectures</span><div><button type="button" id="v2MediaAll" class="v2-subtle">Select all</button><button type="button" id="v2MediaClear" class="v2-subtle">Clear</button></div></div>
+ <div id="v2MediaList" class="v2-media-list"></div><button type="button" id="v2MediaSend" class="pill black v2-wide" disabled>Send to bot ↗</button>
+ </div></dialog>
  <div id="toast" role="status" aria-live="polite"></div>
  <nav class="bottom-nav" aria-label="Primary navigation"><button data-nav="home" class="selected"><span>⌂</span>Home</button><button data-nav="courses"><span>▦</span>Courses</button><button data-nav="study"><span>◷</span>Study</button><button data-nav="groups"><span>♧</span>Groups</button><button data-nav="profile"><span>◉</span>Profile</button></nav>
  </main></body></html>
