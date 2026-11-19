@@ -9,7 +9,7 @@ const {Server}=require('socket.io');
 const {query,transaction,pool}=require('./db');
 const {verifyTelegramInitData}=require('./auth');
 const {createBot}=require('./bot');
-const {getAutoSaveStatus,startAutoSave,stopAutoSave}=require('./auto-save');
+const {getAutoSaveStatus,startAutoSave,stopAutoSave,nextChapter,undoAutoSave}=require('./auto-save');
 const {mountV2Features}=require('./v2-features');
 const app=express();const httpServer=createServer(app);
 app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'32kb'}));
@@ -76,7 +76,7 @@ mountV2Features(api,{query,transaction,bot,getBotUsername:()=>botName});
 function owner(req,res,next){if(req.user.id!==OWNER_ID)return res.sendStatus(403);next();}
 api.post('/admin/batches',owner,async(req,res,next)=>{try{const title=String(req.body?.title||'').trim();if(!title||title.length>120)return res.status(400).json({error:'Invalid title'});const {rows}=await query('INSERT INTO batches(title,description,is_published,is_premium) VALUES($1,$2,false,$3) RETURNING *',[title,String(req.body?.description||'').slice(0,500),!!req.body?.isPremium]);res.status(201).json(rows[0]);}catch(e){next(e);}});
 api.post('/admin/subjects',owner,async(req,res,next)=>{try{const title=String(req.body?.title||'').trim();if(!title||title.length>120)return res.status(400).json({error:'Invalid title'});const {rows}=await query('INSERT INTO subjects(batch_id,title) VALUES($1,$2) RETURNING *',[req.body?.batchId,title]);res.status(201).json(rows[0]);}catch(e){next(e);}});
-api.post('/admin/chapters',owner,async(req,res,next)=>{try{const title=String(req.body?.title||'').trim();if(!title||title.length>120)return res.status(400).json({error:'Invalid title'});const {rows}=await query('INSERT INTO chapters(subject_id,title) VALUES($1,$2) RETURNING *',[req.body?.subjectId,title]);res.status(201).json(rows[0]);}catch(e){next(e);}});
+api.post('/admin/chapters',owner,async(req,res,next)=>{try{const title=String(req.body?.title||'').trim();if(!title||title.length>120)return res.status(400).json({error:'Invalid title'});const {rows}=await query('INSERT INTO chapters(subject_id,title,sort_order) VALUES($1,$2,COALESCE((SELECT max(sort_order)+1 FROM chapters WHERE subject_id=$1),0)) RETURNING *',[req.body?.subjectId,title]);res.status(201).json(rows[0]);}catch(e){next(e);}});
 api.post('/admin/lectures',owner,async(req,res,next)=>{try{const title=String(req.body?.title||'').trim();if(!title||title.length>120)return res.status(400).json({error:'Invalid title'});const {rows}=await query('INSERT INTO lectures(chapter_id,title,telegram_video_id,telegram_notes_id) VALUES($1,$2,$3,$4) RETURNING id,title',[req.body?.chapterId,title,req.body?.videoFileId||null,req.body?.notesFileId||null]);res.status(201).json(rows[0]);}catch(e){next(e);}});
 api.post('/admin/batches/:id/publish',owner,async(req,res,next)=>{try{const {rows}=await query('UPDATE batches SET is_published=$2 WHERE id=$1 RETURNING id,is_published',[req.params.id,req.body?.published===true]);if(!rows.length)return res.sendStatus(404);res.json(rows[0]);}catch(e){next(e);}});
 // Owner-only test admin media automation and batch cover image API.
@@ -94,6 +94,12 @@ api.post('/admin/auto-save/start',owner,async(req,res,next)=>{
 });
 api.post('/admin/auto-save/stop',owner,async(req,res,next)=>{
  try{res.json({ok:true,session:await stopAutoSave(req.user.id)});}catch(e){next(e);}
+});
+api.post('/admin/auto-save/next-chapter',owner,async(req,res,next)=>{
+ try{const result=await nextChapter(req.user.id);if(result.error)return res.status(409).json(result);res.json(result);}catch(e){next(e);}
+});
+api.post('/admin/auto-save/undo',owner,async(req,res,next)=>{
+ try{const result=await undoAutoSave(req.user.id);if(result.error)return res.status(409).json(result);res.json(result);}catch(e){next(e);}
 });
 api.put('/admin/batches/:id/cover',owner,express.raw({type:['image/jpeg','image/png','image/webp'],limit:'1536kb'}),async(req,res,next)=>{
  try{
