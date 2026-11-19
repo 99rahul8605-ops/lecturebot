@@ -6,6 +6,10 @@ const {query,transaction}=require('./db');
 const validUuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 function classifyMedia(msg) {
   if(msg.video?.file_id)return {kind:'video',fileId:msg.video.file_id,fileName:msg.video.file_name||'video.mp4'};
+  if(msg.video_note?.file_id)return {kind:'video',fileId:msg.video_note.file_id,fileName:'video_note.mp4',fileType:'video_note'};
+  if(msg.photo?.length)return {kind:'video',fileId:msg.photo.at(-1).file_id,fileName:'photo.jpg',fileType:'photo'};
+  if(msg.audio?.file_id)return {kind:'video',fileId:msg.audio.file_id,fileName:msg.audio.file_name||'audio.mp3',fileType:'audio'};
+  if(msg.voice?.file_id)return {kind:'video',fileId:msg.voice.file_id,fileName:'voice.ogg',fileType:'voice'};
   
   if(msg.document?.file_id) {
     const mime=String(msg.document.mime_type||'').toLowerCase(),name=String(msg.document.file_name||'').toLowerCase();
@@ -105,7 +109,7 @@ async function processAutoSave(message,ownerId) {
     if(dup.rowCount)return {kind:'duplicate'};
     const code=crypto.randomBytes(12).toString('base64url');
     const fileType=media.fileType||(media.kind==='pdf'?'document':'video');
-    await c.query('INSERT INTO saved_telegram_files(code,telegram_id,telegram_file_id,file_type,file_name) VALUES($1,$2,$3,$4,$5)',[code,owner,media.fileId,fileType==='photo'||fileType==='audio'?'document':fileType,safeFileName(media.fileName)]);
+    await c.query('INSERT INTO saved_telegram_files(code,telegram_id,telegram_file_id,file_type,file_name) VALUES($1,$2,$3,$4,$5)',[code,owner,media.fileId,fileType,safeFileName(media.fileName)]);
     let lecture,lectureNumber=null;
     if(media.kind==='video'){
       const n=await c.query('SELECT count(*)::int AS total,coalesce(max(sort_order),-1)+1 AS next_order FROM lectures WHERE chapter_id=$1 AND unit_id IS NOT DISTINCT FROM $2::uuid',[session.chapter_id,session.unit_id]);
