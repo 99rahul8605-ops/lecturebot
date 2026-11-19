@@ -29,13 +29,14 @@ async function loadAutoSaveStatus(){
   const el=document.getElementById('v2AutoSaveStatus');
   if(s.is_active){
     el.classList.add('active');
-    el.innerHTML='<b>✅ Auto Mode Active</b><div>📍 '+escapeHtml(s.batch_title)+' › '+escapeHtml(s.subject_title)+' › '+escapeHtml(s.chapter_title)+'</div><div>▶️ Next: <b>Lecture '+Number(s.next_lecture_number||1)+'</b></div><small>📊 Already saved: '+Number(s.lecture_count||0)+' lectures · '+Number(s.missing_notes||0)+' missing notes</small><small>THIS SESSION: '+Number(s.saved_videos||0)+' videos · '+Number(s.saved_pdfs||0)+' PDFs</small>';
+    el.innerHTML='<b>✅ Auto Mode Active</b><div>📍 '+escapeHtml(s.batch_title)+' › '+escapeHtml(s.subject_title)+' › '+escapeHtml(s.chapter_title)+(s.unit_title?' › '+escapeHtml(s.unit_title):'')+'</div><div>▶️ Next: <b>Lecture '+Number(s.next_lecture_number||1)+'</b></div><small>📊 Already saved: '+Number(s.lecture_count||0)+' lectures · '+Number(s.missing_notes||0)+' missing notes</small><small>THIS SESSION: '+Number(s.saved_videos||0)+' videos · '+Number(s.saved_pdfs||0)+' PDFs</small>';
   }else{
     el.classList.remove('active');
     el.innerHTML='<b>■ AUTO SAVE OFF</b><div>Select a batch, subject and chapter, then tap Start.</div>';
   }
   document.getElementById('v2StopAutoSave').disabled=!s.is_active;
   document.getElementById('v2AutoNextChapter').disabled=!s.is_active;
+  document.getElementById('v2AutoNextUnit').disabled=!s.is_active;
   document.getElementById('v2AutoUndo').disabled=!s.is_active;
   document.getElementById('v2AutoLiveBadge').classList.toggle('hidden',!s.is_active);
   const cfg=await api('/config');
@@ -50,7 +51,7 @@ document.getElementById('adminAutoSaveForm').onsubmit=async function(event){
   if(!chapterId)return toast('Select batch, subject and chapter');
   const button=this.querySelector('[type=submit]');button.disabled=true;
   try{
-    await api('/admin/auto-save/start',{method:'POST',body:JSON.stringify({chapterId})});
+    await api('/admin/auto-save/start',{method:'POST',body:JSON.stringify({chapterId,unitId:this.elements.unitId?.value||null})});
     await loadAutoSaveStatus();
     toast('Auto Save ON — now send media to your TEST Telegram bot');
   }catch(err){toast(err.message)}finally{button.disabled=false}
@@ -60,6 +61,9 @@ document.getElementById('v2StopAutoSave').onclick=async()=>{
 };
 document.getElementById('v2AutoNextChapter').onclick=async()=>{
  try{const r=await api('/admin/auto-save/next-chapter',{method:'POST',body:'{}'});await loadAutoSaveStatus();toast('Switched to '+r.chapter_title+' · next Lecture '+r.next_lecture_number);}catch(err){toast(err.message)}
+};
+document.getElementById('v2AutoNextUnit').onclick=async()=>{
+ try{const r=await api('/admin/auto-save/next-unit',{method:'POST',body:'{}'});await loadAutoSaveStatus();toast('Switched to '+r.unit_title+' · next Lecture '+r.next_lecture_number);}catch(err){toast(err.message)}
 };
 document.getElementById('v2AutoUndo').onclick=async()=>{
  if(!confirm('Undo the LAST auto-save action only?'))return;
