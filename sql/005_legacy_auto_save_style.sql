@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS saved_telegram_files(
  code text PRIMARY KEY CHECK(code ~ '^[A-Za-z0-9_-]{12,40}$'),
  telegram_id text NOT NULL REFERENCES app_users(telegram_id) ON DELETE CASCADE,
  telegram_file_id text NOT NULL,
- file_type text NOT NULL CHECK(file_type IN ('video','document')),
+ file_type text NOT NULL CHECK(file_type IN ('video','document','photo','audio','voice','video_note')),
  file_name text NOT NULL DEFAULT '',
  created_at timestamptz NOT NULL DEFAULT now()
 );
