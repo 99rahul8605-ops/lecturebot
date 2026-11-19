@@ -57,6 +57,54 @@ The UI is a closer functional interpretation of the supplied reference, but **no
 
 ---
 
+## Auto Save + Batch Cover Image (V2 TEST, 2026-11-19)
+
+**Required migration:** In the separate V2 Supabase project's SQL Editor, after 001, 002 and 003, run:
+
+```
+sql/004_auto_save_batch_covers.sql
+```
+
+**Do not run this SQL in the old production database.** The bot must have `BOT_POLLING=true` with a new TEST bot token; `OWNER_ID` must equal the Telegram ID of the administrator.
+
+### Admin → Auto Save
+
+1. Open the V2 test bot's Mini App from Telegram with the configured owner account.
+2. Go Profile → Admin → Auto Save (full-screen page).
+3. Choose Batch → Subject → Chapter, then press **Start Auto Save**.
+4. Send Telegram **videos** (including supported video documents) to the new **test bot's private chat**. Each message creates one lecture in the selected chapter, using caption/filename for the title or Lecture 01, 02, etc.
+5. Send PDFs to the same chat. PDFs are assigned to the first existing lecture with missing notes, in ascending lecture order, and **never overwrite** existing notes. If all existing lectures have notes, the PDF is rejected with a message rather than inventing a lecture.
+6. Use **Stop Auto Save** or Telegram command `/autosavestop` when finished. `/autosavestatus` reports the active selection and saved totals.
+
+Selections and counters persist in PostgreSQL through bot restarts. Duplicate Telegram message IDs in a chat are ignored to prevent replay duplicates; each new upload message counts as a separate action. Only owner uploads in a private chat are accepted. All writes are transactional.
+
+### Admin → Batch / Batch Cover Images
+
+- When creating a batch, choose a JPEG, PNG or WebP image (maximum **1.5 MB**) to attach the cover. The batch is created first, then its image uploads; if the image fails, the batch remains as a draft and you can retry.
+- For existing batches go **Admin → Batch Cover Images**, select the batch, choose an image, then save or remove the image.
+- Images are stored in Supabase PostgreSQL (small `bytea` records), independent of the VPS. Published batch covers appear in the student course cards. Draft covers can only be previewed through an authenticated owner endpoint.
+- The image must have a matching file signature; invalid or unsupported content is rejected. Large images should be resized/compressed by the administrator before upload.
+- For eventual high-volume production, external object storage/CDN is preferable to storing images directly in PostgreSQL. Regular off-site database backups are still required.
+
+### Deploy these changes on the V2 test container only
+
+```bash
+cd /lecturebot
+git pull origin main
+npm install
+npm test
+npm run check
+# ONLY after sql/004 migration succeeds:
+screen -S edubot_v2 -X quit 2>/dev/null || true
+screen -dmS edubot_v2 bash -c 'cd /lecturebot && NODE_USE_SYSTEM_CA=1 npm start'
+# Check the port shown in startup logs, e.g.:
+curl -sS http://127.0.0.1:8080/api/health
+```
+
+**Never restart, clone over, or switch the old CA Inter production bot during V2 testing.** The V2 Quick Tunnel must target the actual listening port. A new test token cannot necessarily reuse file IDs generated with another Telegram bot.
+
+---
+
 ## What's implemented
 
 - Cream + lime / black UI inspired by the supplied 18-screen EduBot prototype.
