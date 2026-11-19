@@ -125,7 +125,7 @@ async function processAutoSave(message,ownerId) {
     }else{
       // Same legacy rule: attach PDFs to FIRST lecture lacking notes, not latest.
       const found=await c.query('SELECT id,title FROM lectures WHERE chapter_id=$1 AND unit_id IS NOT DISTINCT FROM $2::uuid AND telegram_video_id IS NOT NULL AND telegram_notes_id IS NULL ORDER BY sort_order,created_at,id LIMIT 1 FOR UPDATE',[session.chapter_id,session.unit_id]);
-      if(!found.rowCount)return {kind:'no_lecture',chapter:session.chapter_title,code,fileName:media.fileName};
+      if(!found.rowCount){await c.query('INSERT INTO auto_save_receipts(telegram_id,chat_id,message_id,media_kind,lecture_id,file_code) VALUES($1,$2,$3,$4,NULL,$5)',[owner,chatId,msgId,media.kind,code]);return {kind:'no_lecture',chapter:session.chapter_title,code,fileName:media.fileName};}
       lecture=found.rows[0];
       await c.query('UPDATE lectures SET telegram_notes_id=$2 WHERE id=$1 AND telegram_notes_id IS NULL',[lecture.id,media.fileId]);
       const position=await c.query('SELECT count(*)::int AS n FROM lectures WHERE chapter_id=$1 AND unit_id IS NOT DISTINCT FROM $3::uuid AND (sort_order,id)<=(SELECT sort_order,id FROM lectures WHERE id=$2)',[session.chapter_id,lecture.id,session.unit_id]);
