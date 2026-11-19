@@ -39,7 +39,7 @@ function createBot({token,webUrl,ownerId}) {
           }
         }
         const caption=file.file_name.slice(0,900);
-        return sendMedia(msg.chat.id,file.telegram_file_id,file.file_type,caption,file.media_kind==='video');
+        return await sendMedia(msg.chat.id,file.telegram_file_id,file.file_type,caption,file.media_kind==='video');
       }
       if(/^grp_[a-f0-9]{16}$/.test(arg)){
         const inviteCode=arg.slice(4);
@@ -74,7 +74,7 @@ function createBot({token,webUrl,ownerId}) {
         const paid=lec.is_premium||lec.batch_premium;
         if(paid && id!==ownerId){const access=await query('SELECT 1 FROM batch_access WHERE telegram_id=$1 AND batch_id=$2 AND (expires_at IS NULL OR expires_at>now())',[id,lec.batch_id]);if(!access.rowCount)return bot.sendMessage(msg.chat.id,'🔒 Premium lecture. Purchase or request access inside the app.');}
         if(!lec.telegram_video_id)return bot.sendMessage(msg.chat.id,'Lecture video not uploaded yet.');
-        return sendMedia(msg.chat.id,lec.telegram_video_id,lec.telegram_video_type,lec.title,true);
+        return await sendMedia(msg.chat.id,lec.telegram_video_id,lec.telegram_video_type,lec.title,true);
       }
       if(/^note_[a-f0-9-]{36}$/.test(arg)){
         const {rows}=await query(`SELECT l.title,l.telegram_notes_id,l.is_premium,b.is_premium AS batch_premium,b.id AS batch_id FROM lectures l JOIN chapters c ON c.id=l.chapter_id JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id WHERE l.id=$1 AND b.is_published=true`,[arg.slice(5)]);
