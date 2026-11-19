@@ -9,6 +9,7 @@ const {Server}=require('socket.io');
 const {query,transaction,pool}=require('./db');
 const {verifyTelegramInitData}=require('./auth');
 const {createBot}=require('./bot');
+const {getAutoSaveStatus,startAutoSave,stopAutoSave}=require('./auto-save');
 const {mountV2Features}=require('./v2-features');
 const app=express();const httpServer=createServer(app);
 app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'32kb'}));
@@ -21,6 +22,16 @@ function auth(req,res,next){try{req.user=verifyTelegramInitData(req.get('x-teleg
 const api=express.Router();app.use('/api',api);
 api.get('/health',async(_req,res)=>{try{await query('SELECT 1');res.json({ok:true,database:'connected',version:'v2-test'});}catch{res.status(503).json({ok:false,database:'unavailable'});}});
 api.get('/config',(_req,res)=>res.json({botUsername:botName,adsEnabled:false,testMode:true}));
+// Published batch covers are public assets; unpublished draft covers require owner API.
+api.get('/batches/:id/cover',async(req,res,next)=>{
+ try{
+  if(!/^[a-f0-9-]{36}$/i.test(req.params.id))return res.sendStatus(404);
+  const {rows}=await query('SELECT c.content_type,c.image_bytes FROM batch_covers c JOIN batches b ON b.id=c.batch_id WHERE c.batch_id=$1 AND b.is_published=true',[req.params.id]);
+  if(!rows[0])return res.sendStatus(404);
+  res.set({'Content-Type':rows[0].content_type,'Cache-Control':'public, max-age=300','X-Content-Type-Options':'nosniff'});
+  res.send(rows[0].image_bytes);
+ }catch(e){next(e);}
+});
 api.use(auth);
 api.get('/me',async(req,res,next)=>{try{
  const u=req.user;await query(`INSERT INTO app_users(telegram_id,first_name,last_name,username,last_seen) VALUES($1,$2,$3,$4,now()) ON CONFLICT(telegram_id) DO UPDATE SET first_name=$2,last_name=$3,username=$4,last_seen=now()`,[u.id,u.firstName,u.lastName,u.username]);
@@ -68,6 +79,60 @@ api.post('/admin/subjects',owner,async(req,res,next)=>{try{const title=String(re
 api.post('/admin/chapters',owner,async(req,res,next)=>{try{const title=String(req.body?.title||'').trim();if(!title||title.length>120)return res.status(400).json({error:'Invalid title'});const {rows}=await query('INSERT INTO chapters(subject_id,title) VALUES($1,$2) RETURNING *',[req.body?.subjectId,title]);res.status(201).json(rows[0]);}catch(e){next(e);}});
 api.post('/admin/lectures',owner,async(req,res,next)=>{try{const title=String(req.body?.title||'').trim();if(!title||title.length>120)return res.status(400).json({error:'Invalid title'});const {rows}=await query('INSERT INTO lectures(chapter_id,title,telegram_video_id,telegram_notes_id) VALUES($1,$2,$3,$4) RETURNING id,title',[req.body?.chapterId,title,req.body?.videoFileId||null,req.body?.notesFileId||null]);res.status(201).json(rows[0]);}catch(e){next(e);}});
 api.post('/admin/batches/:id/publish',owner,async(req,res,next)=>{try{const {rows}=await query('UPDATE batches SET is_published=$2 WHERE id=$1 RETURNING id,is_published',[req.params.id,req.body?.published===true]);if(!rows.length)return res.sendStatus(404);res.json(rows[0]);}catch(e){next(e);}});
+// Owner-only test admin media automation and batch cover image API.
+api.get('/admin/auto-save',owner,async(req,res,next)=>{
+ try{res.json(await getAutoSaveStatus(req.user.id));}catch(e){next(e);}
+});
+api.post('/admin/auto-save/start',owner,async(req,res,next)=>{
+ try{
+  const chapterId=req.body?.chapterId;
+  if(typeof chapterId!=='string'||!/^[a-f0-9-]{36}$/i.test(chapterId))return res.status(400).json({error:'Choose a valid chapter'});
+  const session=await startAutoSave(req.user.id,chapterId);
+  if(!session)return res.status(404).json({error:'Chapter not found'});
+  res.json(session);
+ }catch(e){next(e);}
+});
+api.post('/admin/auto-save/stop',owner,async(req,res,next)=>{
+ try{res.json({ok:true,session:await stopAutoSave(req.user.id)});}catch(e){next(e);}
+});
+api.put('/admin/batches/:id/cover',owner,express.raw({type:['image/jpeg','image/png','image/webp'],limit:'1536kb'}),async(req,res,next)=>{
+ try{
+  const id=req.params.id;
+  if(!/^[a-f0-9-]{36}$/i.test(id))return res.status(400).json({error:'Invalid batch ID'});
+  const type=req.get('content-type')?.split(';')[0].trim().toLowerCase();
+  if(!['image/jpeg','image/png','image/webp'].includes(type)||!Buffer.isBuffer(req.body)||req.body.length<16||req.body.length>1536*1024){
+   return res.status(400).json({error:'Upload JPEG, PNG or WebP under 1.5 MB'});
+  }
+  const ok=(type==='image/jpeg'&&req.body[0]===255&&req.body[1]===216&&req.body[2]===255)
+   ||(type==='image/png'&&req.body.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))
+   ||(type==='image/webp'&&req.body.toString('ascii',0,4)==='RIFF'&&req.body.toString('ascii',8,12)==='WEBP');
+  if(!ok)return res.status(400).json({error:'Image contents do not match file type'});
+  const found=await query('SELECT 1 FROM batches WHERE id=$1',[id]);
+  if(!found.rowCount)return res.status(404).json({error:'Batch not found'});
+  await transaction(async c=>{
+   await c.query('INSERT INTO batch_covers(batch_id,content_type,image_bytes) VALUES($1,$2,$3) ON CONFLICT(batch_id) DO UPDATE SET content_type=$2,image_bytes=$3,updated_at=now()',[id,type,req.body]);
+   await c.query('UPDATE batches SET cover_url=$2 WHERE id=$1',[id,'/api/batches/'+id+'/cover']);
+  });
+  res.json({ok:true,coverUrl:'/api/batches/'+id+'/cover'});
+ }catch(e){next(e);}
+});
+api.delete('/admin/batches/:id/cover',owner,async(req,res,next)=>{
+ try{
+  await transaction(async c=>{
+   await c.query('DELETE FROM batch_covers WHERE batch_id=$1',[req.params.id]);
+   await c.query('UPDATE batches SET cover_url=NULL WHERE id=$1',[req.params.id]);
+  });
+  res.json({ok:true});
+ }catch(e){next(e);}
+});
+api.get('/admin/batches/:id/cover',owner,async(req,res,next)=>{
+ try{
+  const {rows}=await query('SELECT content_type,image_bytes,updated_at FROM batch_covers WHERE batch_id=$1',[req.params.id]);
+  if(!rows[0])return res.sendStatus(404);
+  res.set({'Content-Type':rows[0].content_type,'Cache-Control':'private, max-age=60','X-Content-Type-Options':'nosniff'});
+  res.send(rows[0].image_bytes);
+ }catch(e){next(e);}
+});
 api.get('/admin/overview',owner,async(_req,res,next)=>{try{const [users,batches,lectures]=await Promise.all([query('SELECT count(*)::int AS n FROM app_users'),query('SELECT count(*)::int AS n FROM batches'),query('SELECT count(*)::int AS n FROM lectures')]);res.json({users:users.rows[0].n,batches:batches.rows[0].n,lectures:lectures.rows[0].n});}catch(e){next(e);}});
 app.use((err,req,res,next)=>{console.error('API error:',err.message);if(err.code==='22P02')return res.status(400).json({error:'Invalid identifier'});if(err.code==='23503')return res.status(400).json({error:'Linked record not found'});res.status(500).json({error:'Internal server error'});});
 const io=new Server(httpServer,{cors:{origin:false}});
