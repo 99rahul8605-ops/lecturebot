@@ -29,12 +29,15 @@ async function loadAutoSaveStatus(){
   const el=document.getElementById('v2AutoSaveStatus');
   if(s.is_active){
     el.classList.add('active');
-    el.innerHTML='<b>● AUTO SAVE ON</b><div>'+escapeHtml(s.batch_title)+' › '+escapeHtml(s.subject_title)+' › '+escapeHtml(s.chapter_title)+'</div><small>✅ '+Number(s.saved_videos||0)+' videos · 📄 '+Number(s.saved_pdfs||0)+' PDFs saved this session</small>';
+    el.innerHTML='<b>✅ Auto Mode Active</b><div>📍 '+escapeHtml(s.batch_title)+' › '+escapeHtml(s.subject_title)+' › '+escapeHtml(s.chapter_title)+'</div><div>▶️ Next: <b>Lecture '+Number(s.next_lecture_number||1)+'</b></div><small>📊 Already saved: '+Number(s.lecture_count||0)+' lectures · '+Number(s.missing_notes||0)+' missing notes</small><small>THIS SESSION: '+Number(s.saved_videos||0)+' videos · '+Number(s.saved_pdfs||0)+' PDFs</small>';
   }else{
     el.classList.remove('active');
     el.innerHTML='<b>■ AUTO SAVE OFF</b><div>Select a batch, subject and chapter, then tap Start.</div>';
   }
   document.getElementById('v2StopAutoSave').disabled=!s.is_active;
+  document.getElementById('v2AutoNextChapter').disabled=!s.is_active;
+  document.getElementById('v2AutoUndo').disabled=!s.is_active;
+  document.getElementById('v2AutoLiveBadge').classList.toggle('hidden',!s.is_active);
   const cfg=await api('/config');
   const link=document.getElementById('v2AutoSaveBotLink');
   if(cfg.botUsername){link.href='https://t.me/'+cfg.botUsername;link.classList.remove('hidden')}
@@ -55,6 +58,19 @@ document.getElementById('adminAutoSaveForm').onsubmit=async function(event){
 document.getElementById('v2StopAutoSave').onclick=async()=>{
   try{await api('/admin/auto-save/stop',{method:'POST',body:'{}'});await loadAutoSaveStatus();toast('Auto Save stopped')}catch(err){toast(err.message)}
 };
+document.getElementById('v2AutoNextChapter').onclick=async()=>{
+ try{const r=await api('/admin/auto-save/next-chapter',{method:'POST',body:'{}'});await loadAutoSaveStatus();toast('Switched to '+r.chapter_title+' · next Lecture '+r.next_lecture_number);}catch(err){toast(err.message)}
+};
+document.getElementById('v2AutoUndo').onclick=async()=>{
+ if(!confirm('Undo the LAST auto-save action only?'))return;
+ try{const r=await api('/admin/auto-save/undo',{method:'POST',body:'{}'});await loadAutoSaveStatus();toast(r.kind==='lecture'?'Last lecture removed':'Last notes attachment removed');}catch(err){toast(err.message)}
+};
+let v2AutoRefreshBusy=false;
+setInterval(async()=>{
+ if(state.page!=='admin-editor'||document.querySelector('[data-admin-section="autosave"]')?.classList.contains('hidden')||v2AutoRefreshBusy)return;
+ v2AutoRefreshBusy=true;
+ try{await loadAutoSaveStatus()}catch{}finally{v2AutoRefreshBusy=false}
+},6000);
 document.getElementById('v2RefreshAutoSave').onclick=()=>loadAutoSaveStatus().catch(e=>toast(e.message));
 document.querySelector('#adminBatchForm [name=coverImage]').addEventListener('change',e=>{
   try{coverPreview(e.target,'v2BatchCoverPreview')}catch(err){toast(err.message)}
