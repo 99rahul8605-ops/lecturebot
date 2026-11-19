@@ -100,6 +100,29 @@ function createBot({token,webUrl,ownerId}) {
       await bot.sendMessage(msg.chat.id,'❌ Auto Save error. Confirm the item in Admin before retrying.').catch(()=>{});
     });
   });
+  // Same old-bot convenience: send a Telegram channel post link instead of a file.
+  // Telegram must be allowed to access/forward that original post.
+  bot.onText(/^https?:\/\/t\.me\/(?:c\/(\d+)|([A-Za-z][A-Za-z0-9_]{3,}))\/(\d+)(?:\?.*)?$/i,async(msg,match)=>{
+    if(msg.chat?.type!=='private'||String(msg.from?.id)!==String(ownerId))return;
+    const source=match[1]?'-100'+match[1]:'@'+match[2];
+    const sourceMessageId=Number(match[3]);
+    if(!Number.isSafeInteger(sourceMessageId)||sourceMessageId<1)return;
+    try{
+      const session=await getAutoSaveStatus(ownerId);
+      if(!session.is_active)return bot.sendMessage(msg.chat.id,'Auto Mode OFF. Choose a chapter in Admin → Auto Save first.');
+      const forwarded=await bot.forwardMessage(msg.chat.id,source,sourceMessageId);
+      try{
+        // Use pasted-link message ID for deduplication, not the temporary forward.
+        const synthetic={...forwarded,from:msg.from,chat:msg.chat,message_id:msg.message_id};
+        bot.emit('message',synthetic);
+      }finally{
+        await bot.deleteMessage(msg.chat.id,forwarded.message_id).catch(()=>{});
+      }
+    }catch(error){
+      console.error('Auto Save channel link:',error.message);
+      await bot.sendMessage(msg.chat.id,'⚠️ Could not fetch that Telegram post. The test bot must be able to access/forward from the source channel. Otherwise forward or upload the file directly.').catch(()=>{});
+    }
+  });
   bot.onText(/^\/autosavestatus$/,async msg=>{
     if(msg.chat.type!=='private'||String(msg.from?.id)!==String(ownerId))return;
     try{
