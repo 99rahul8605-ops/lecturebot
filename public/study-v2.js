@@ -80,7 +80,41 @@ async function v2LoadStats(){
  v2e('v2StatsSubjects').innerHTML=r.bySubject.length?r.bySubject.map(s=>'<div class="v2-subject-row"><header><b>'+v2esc(s.title)+'</b><b>'+v2fmt(s.minutes)+'</b></header><div class="v2-subject-bar"><i style="width:'+Math.max(0,s.minutes/max*100)+'%"></i></div></div>').join(''):'<div class="empty">No study sessions recorded yet.</div>';
  document.querySelectorAll('[data-statsperiod]').forEach(x=>x.classList.toggle('active',x.dataset.statsperiod===v2.statsPeriod));
 }
-async function v2Load(page){if(page==='groups')return v2LoadGroups();if(page==='global-room')return v2LoadGlobal();if(page==='group-detail')return v2LoadDetail();if(page==='manage-group')return v2LoadManage();if(page==='study-plan')return v2LoadPlan();if(page==='study-pick')return v2LoadPick();if(page==='study-stats')return v2LoadStats();}
+async function v2LoadStudy(){
+ const [me,room,plan,stats]=await Promise.all([api('/me'),api('/study/global-room'),api('/study/plan'),api('/study/stats')]);
+ v2e('v2TimerStreak').textContent=me.studyDaysLast7;
+ v2e('v2TimerRoomCount').textContent=room.live.length;
+ v2e('v2DailyGoalTimer').textContent=v2fmt(plan.targetMinutes);
+ v2e('v2StudyTotalDisplay').textContent=v2fmt(stats.total_minutes);
+ if(state.studyStart && v2.subjectId){const all=await api('/study/subjects');v2e('v2TimerSubject').textContent=all.find(x=>x.id===v2.subjectId)?.title||'Study session';}
+ v2UpdateTimerDisplay();
+}
+const v2Timer={mode:'pomodoro',minutes:25};
+function v2UpdateTimerDisplay(){
+ const running=Boolean(state.studyStart);
+ const elapsed=running?Math.max(0,Math.floor((Date.now()-new Date(state.studyStart).getTime())/1000)):0;
+ if(v2Timer.mode==='stopwatch'){
+   v2e('clock').textContent=[Math.floor(elapsed/3600),Math.floor(elapsed/60)%60,elapsed%60].map(x=>String(x).padStart(2,'0')).join(':');
+ }else{
+   const remaining=Math.max(0,v2Timer.minutes*60-elapsed);
+   v2e('clock').textContent=[Math.floor(remaining/60),remaining%60].map(x=>String(x).padStart(2,'0')).join(':');
+   if(running&&remaining===0)v2e('studyStatus').textContent='Focus goal reached! Finish to save your session.';
+ }
+}
+updateClock = v2UpdateTimerDisplay;
+document.querySelectorAll('[data-studymode]').forEach(b=>b.addEventListener('click',()=>{
+ if(state.studyStart)return toast('Finish current session before changing mode');
+ let mode=b.dataset.studymode;
+ if(mode==='custom'){
+   const v=prompt('Custom focus length (minutes, 5–180):','45');
+   if(v===null)return;const n=Number(v);if(!Number.isInteger(n)||n<5||n>180)return toast('Choose 5–180 minutes');
+   v2Timer.minutes=n;
+ }else if(mode==='pomodoro')v2Timer.minutes=25;
+ v2Timer.mode=mode;
+ document.querySelectorAll('[data-studymode]').forEach(x=>x.classList.toggle('active',x===b));
+ v2UpdateTimerDisplay();
+}));
+async function v2Load(page){if(page==='study')return v2LoadStudy();if(page==='groups')return v2LoadGroups();if(page==='global-room')return v2LoadGlobal();if(page==='group-detail')return v2LoadDetail();if(page==='manage-group')return v2LoadManage();if(page==='study-plan')return v2LoadPlan();if(page==='study-pick')return v2LoadPick();if(page==='study-stats')return v2LoadStats();}
 
 document.addEventListener('click',async e=>{
  const open=e.target.closest('[data-v2group]');
@@ -103,8 +137,9 @@ v2e('v2ChatForm').onsubmit=async e=>{e.preventDefault();const input=v2e('v2ChatI
 v2e('v2PlanTaskForm').onsubmit=async e=>{e.preventDefault();try{await api('/tasks',{method:'POST',body:JSON.stringify({title:v2e('v2PlanTaskInput').value})});v2e('v2PlanTaskInput').value='';await v2LoadPlan()}catch(err){toast(err.message)}};
 v2e('v2PlanTasks').onchange=async e=>{const id=e.target.dataset.v2task;if(!id)return;try{await api('/tasks/'+id,{method:'PATCH',body:JSON.stringify({isDone:e.target.checked})});await v2LoadPlan()}catch(err){toast(err.message)}};
 v2e('v2EditGoal').onclick=async()=>{const hours=prompt('Daily study goal (hours, 0.25 to 24):','4');if(hours===null)return;const mins=Math.round(Number(hours)*60);if(!Number.isFinite(mins)||mins<15||mins>1440)return toast('Choose between 0.25 and 24 hours');try{await api('/study/goal',{method:'POST',body:JSON.stringify({targetMinutes:mins})});await v2LoadPlan()}catch(err){toast(err.message)}};
-v2e('v2StartFocus').onclick=async()=>{try{const r=await api('/study/start',{method:'POST',body:JSON.stringify({subjectId:v2.subjectId})});setStudy(r.started_at);setPage('study');toast('Focus session started')}catch(err){toast(err.message)}};
+v2e('v2StartFocus').onclick=async()=>{try{const r=await api('/study/start',{method:'POST',body:JSON.stringify({subjectId:v2.subjectId})});setStudy(r.started_at);const s=(await api('/study/subjects')).find(x=>x.id===v2.subjectId);v2e('v2TimerSubject').textContent=s?.title||'General study';setPage('study');toast('Focus session started')}catch(err){toast(err.message)}};
 // Old primary button launches the reference subject picker instead of starting an untagged timer.
 v2e('studyStart').onclick=()=>setPage('study-pick');
 // Keep full group UI refreshed when realtime messages arrive.
+v2UpdateTimerDisplay();
 setInterval(()=>{if(state.page==='group-detail'&&v2.groupTab==='timers')v2LoadDetail().catch(()=>{});if(state.page==='global-room')v2LoadGlobal().catch(()=>{})},20000);
