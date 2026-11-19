@@ -28,7 +28,7 @@ function createBot({token,webUrl,ownerId}) {
       }
       if(/^file_[a-zA-Z0-9_-]{16}$/.test(arg)){
         const code=arg.slice(5);
-        const {rows}=await query("SELECT f.code,f.telegram_file_id,f.file_type,f.file_name,f.telegram_id AS uploader,r.lecture_id,l.telegram_video_id,l.telegram_video_type,l.telegram_notes_id,b.is_published,(b.is_premium OR l.is_premium) AS premium,b.id AS batch_id FROM saved_telegram_files f LEFT JOIN auto_save_receipts r ON r.file_code=f.code AND r.is_undone=false LEFT JOIN lectures l ON l.id=r.lecture_id LEFT JOIN chapters c ON c.id=l.chapter_id LEFT JOIN subjects s ON s.id=c.subject_id LEFT JOIN batches b ON b.id=s.batch_id WHERE f.code=$1 ORDER BY r.saved_at DESC LIMIT 1",[code]);
+        const {rows}=await query("SELECT f.code,f.telegram_file_id,f.file_type,f.media_kind,f.file_name,f.telegram_id AS uploader,r.lecture_id,l.telegram_video_id,l.telegram_video_type,l.telegram_notes_id,b.is_published,(b.is_premium OR l.is_premium) AS premium,b.id AS batch_id FROM saved_telegram_files f LEFT JOIN auto_save_receipts r ON r.file_code=f.code AND r.is_undone=false LEFT JOIN lectures l ON l.id=r.lecture_id LEFT JOIN chapters c ON c.id=l.chapter_id LEFT JOIN subjects s ON s.id=c.subject_id LEFT JOIN batches b ON b.id=s.batch_id WHERE f.code=$1 ORDER BY r.saved_at DESC LIMIT 1",[code]);
         const file=rows[0];
         if(!file)return bot.sendMessage(msg.chat.id,'File not found.');
         if(id!==ownerId){
@@ -39,7 +39,7 @@ function createBot({token,webUrl,ownerId}) {
           }
         }
         const caption=file.file_name.slice(0,900);
-        return sendMedia(msg.chat.id,file.telegram_file_id,file.file_type,caption,true);
+        return sendMedia(msg.chat.id,file.telegram_file_id,file.file_type,caption,file.media_kind==='video');
       }
       if(/^grp_[a-f0-9]{16}$/.test(arg)){
         const inviteCode=arg.slice(4);
