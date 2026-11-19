@@ -87,7 +87,29 @@ api.post('/admin/units',owner,async(req,res,next)=>{try{
  const {rows}=await query('INSERT INTO units(chapter_id,title,sort_order) VALUES($1,$2,COALESCE((SELECT max(sort_order)+1 FROM units WHERE chapter_id=$1),0)) RETURNING id,title,chapter_id',[chapterId,title]);
  res.status(201).json(rows[0]);
 }catch(e){next(e);}});
-api.post('/admin/lectures',owner,async(req,res,next)=>{try{const title=String(req.body?.title||'').trim();if(!title||title.length>120)return res.status(400).json({error:'Invalid title'});const chapterId=req.body?.chapterId,unitId=req.body?.unitId||null;if(unitId){const chk=await query('SELECT 1 FROM units WHERE id=$1 AND chapter_id=$2',[unitId,chapterId]);if(!chk.rowCount)return res.status(400).json({error:'Unit does not belong to selected chapter'});}const {rows}=await query('INSERT INTO lectures(chapter_id,unit_id,title,telegram_video_id,telegram_notes_id) VALUES($1,$2,$3,$4,$5) RETURNING id,title',[chapterId,unitId,title,req.body?.videoFileId||null,req.body?.notesFileId||null]);res.status(201).json(rows[0]);}catch(e){next(e);}});
+async function resolveOwnerSavedMedia(value,kind){
+ const raw=String(value||'').trim();if(!raw)return null;
+ const parsed=/^https:\/\/t\.me\/([a-z][a-z0-9_]{3,31})\?start=file_([A-Za-z0-9_-]{16})$/i.exec(raw);
+ if(!parsed){
+   if(/^https?:\/\//i.test(raw))throw new Error('Only file links from this V2 test bot are supported. Old bot links need a separate migration.');
+   if(raw.length>512||!raw||/\s/.test(raw))throw new Error('Invalid Telegram file ID');
+   return {fileId:raw,mediaType:kind==='video'?'video':'document'};
+ }
+ if(!botName||parsed[1].toLowerCase()!==botName.toLowerCase())throw new Error('Link belongs to another bot; forward media to this test bot instead');
+ const {rows}=await query('SELECT f.telegram_file_id,f.file_type,r.media_kind FROM saved_telegram_files f JOIN auto_save_receipts r ON r.file_code=f.code WHERE f.code=$1 AND f.telegram_id=$2 ORDER BY r.saved_at DESC LIMIT 1',[parsed[2],OWNER_ID]);
+ const file=rows[0];if(!file||file.media_kind!==(kind==='video'?'video':'pdf'))throw new Error('Saved link not found or wrong media type');
+ return {fileId:file.telegram_file_id,mediaType:file.file_type};
+}
+api.post('/admin/lectures',owner,async(req,res,next)=>{
+ try{
+  const title=String(req.body?.title||'').trim(),chapterId=String(req.body?.chapterId||''),unitId=req.body?.unitId||null;
+  if(!title||title.length>120||!/^[a-f0-9-]{36}$/i.test(chapterId))return res.status(400).json({error:'Invalid lecture title/chapter'});
+  if(unitId){const chk=await query('SELECT 1 FROM units WHERE id=$1 AND chapter_id=$2',[unitId,chapterId]);if(!chk.rowCount)return res.status(400).json({error:'Unit does not belong to selected chapter'});}
+  const [video,notes]=await Promise.all([resolveOwnerSavedMedia(req.body?.videoFileId,'video'),resolveOwnerSavedMedia(req.body?.notesFileId,'note')]);
+  const {rows}=await query('INSERT INTO lectures(chapter_id,unit_id,title,telegram_video_id,telegram_video_type,telegram_notes_id) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,title',[chapterId,unitId,title,video?.fileId||null,video?.mediaType||'video',notes?.fileId||null]);
+  res.status(201).json(rows[0]);
+ }catch(e){if(/Link belongs|Saved link|Only file links|Invalid Telegram file ID/.test(e.message))return res.status(400).json({error:e.message});next(e);}
+});
 api.post('/admin/batches/:id/publish',owner,async(req,res,next)=>{try{const {rows}=await query('UPDATE batches SET is_published=$2 WHERE id=$1 RETURNING id,is_published',[req.params.id,req.body?.published===true]);if(!rows.length)return res.sendStatus(404);res.json(rows[0]);}catch(e){next(e);}});
 // Owner-only test admin media automation and batch cover image API.
 api.get('/admin/auto-save',owner,async(req,res,next)=>{
