@@ -8,7 +8,7 @@ ALTER TABLE study_groups ADD COLUMN IF NOT EXISTS show_live_timers boolean NOT N
 ALTER TABLE study_groups ADD COLUMN IF NOT EXISTS chat_mode text NOT NULL DEFAULT 'everyone' CHECK (chat_mode IN ('everyone','admins'));
 ALTER TABLE study_groups ADD COLUMN IF NOT EXISTS slow_mode_seconds integer NOT NULL DEFAULT 0 CHECK (slow_mode_seconds BETWEEN 0 AND 3600);
 ALTER TABLE study_groups ADD COLUMN IF NOT EXISTS pinned_message_id bigint;
-UPDATE study_groups SET invite_code=encode(gen_random_bytes(8),'hex') WHERE invite_code IS NULL;
+UPDATE study_groups SET invite_code=substr(md5(gen_random_uuid()::text||gen_random_uuid()::text),1,16) WHERE invite_code IS NULL;
 ALTER TABLE study_groups ALTER COLUMN invite_code SET NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS study_groups_invite_code_idx ON study_groups(invite_code);
 ALTER TABLE group_members ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'member' CHECK (role IN ('owner','coadmin','member'));
