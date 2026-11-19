@@ -104,12 +104,17 @@ async function processAutoSave(message,ownerId) {
   return transaction(async c=>{
     const {rows}=await c.query("SELECT a.chapter_id,a.unit_id,a.is_active,c.title AS chapter_title,u.title AS unit_title,s.title AS subject_title,b.title AS batch_title FROM auto_save_sessions a JOIN chapters c ON c.id=a.chapter_id LEFT JOIN units u ON u.id=a.unit_id JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id WHERE a.telegram_id=$1 FOR UPDATE OF a",[owner]);
     const session=rows[0];
-    if(!session?.is_active)return null;
     const dup=await c.query('SELECT 1 FROM auto_save_receipts WHERE telegram_id=$1 AND chat_id=$2 AND message_id=$3',[owner,chatId,msgId]);
     if(dup.rowCount)return {kind:'duplicate'};
     const code=crypto.randomBytes(12).toString('base64url');
     const fileType=media.fileType||(media.kind==='pdf'?'document':'video');
     await c.query('INSERT INTO saved_telegram_files(code,telegram_id,telegram_file_id,file_type,file_name) VALUES($1,$2,$3,$4,$5)',[code,owner,media.fileId,fileType,safeFileName(media.fileName)]);
+    // Match the old bot: uploads still receive a link when Auto Mode is OFF.
+    // A free-standing file is owner-only until explicitly associated with a published lecture.
+    if(!session?.is_active){
+      await c.query('INSERT INTO auto_save_receipts(telegram_id,chat_id,message_id,media_kind,lecture_id,file_code) VALUES($1,$2,$3,$4,NULL,$5)',[owner,chatId,msgId,media.kind,code]);
+      return {kind:'file',fileName:media.fileName,code,mediaType:fileType};
+    }
     let lecture,lectureNumber=null;
     if(media.kind==='video'){
       const n=await c.query('SELECT count(*)::int AS total,coalesce(max(sort_order),-1)+1 AS next_order FROM lectures WHERE chapter_id=$1 AND unit_id IS NOT DISTINCT FROM $2::uuid',[session.chapter_id,session.unit_id]);
