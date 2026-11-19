@@ -1,0 +1,7 @@
+{
+  "name": "edubot-next", "version": "0.1.0", "private": true,
+  "description": "Isolated EduBot V2 Telegram Mini App and Supabase PostgreSQL backend",
+  "scripts": { "start": "node src/server.js", "dev": "node --watch src/server.js", "test": "node --test tests/*.test.js", "check": "node --check src/server.js && node --check src/bot.js && node --check src/auth.js && node --check public/app.js" },
+  "engines": {"node": ">=20"},
+  "dependencies": {"dotenv":"^16.6.1","express":"^4.21.2","helmet":"^8.0.0","pg":"^8.13.3","socket.io":"^4.8.1","node-telegram-bot-api":"^0.66.0"}
+}
