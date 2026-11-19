@@ -16,3 +16,6 @@ CREATE TABLE IF NOT EXISTS saved_telegram_files(
 CREATE INDEX IF NOT EXISTS saved_telegram_files_owner ON saved_telegram_files(telegram_id,created_at DESC);
 ALTER TABLE saved_telegram_files ENABLE ROW LEVEL SECURITY;
 CREATE UNIQUE INDEX IF NOT EXISTS auto_save_receipts_file_code_idx ON auto_save_receipts(file_code) WHERE file_code IS NOT NULL;
+
+-- Preserve original Telegram media type for uploads sent as documents.
+ALTER TABLE lectures ADD COLUMN IF NOT EXISTS telegram_video_type text NOT NULL DEFAULT 'video' CHECK(telegram_video_type IN ('video','document'));
