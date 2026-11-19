@@ -98,7 +98,7 @@ async function processAutoSave(message,ownerId) {
   if(!media||!Number.isSafeInteger(message.message_id))return null;
   const owner=String(ownerId),chatId=String(message.chat.id),msgId=message.message_id;
   return transaction(async c=>{
-    const {rows}=await c.query("SELECT a.chapter_id,a.is_active,c.title AS chapter_title,s.title AS subject_title,b.title AS batch_title FROM auto_save_sessions a JOIN chapters c ON c.id=a.chapter_id JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id WHERE a.telegram_id=$1 FOR UPDATE OF a",[owner]);
+    const {rows}=await c.query("SELECT a.chapter_id,a.unit_id,a.is_active,c.title AS chapter_title,u.title AS unit_title,s.title AS subject_title,b.title AS batch_title FROM auto_save_sessions a JOIN chapters c ON c.id=a.chapter_id LEFT JOIN units u ON u.id=a.unit_id JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id WHERE a.telegram_id=$1 FOR UPDATE OF a",[owner]);
     const session=rows[0];
     if(!session?.is_active)return null;
     const dup=await c.query('SELECT 1 FROM auto_save_receipts WHERE telegram_id=$1 AND chat_id=$2 AND message_id=$3',[owner,chatId,msgId]);
@@ -108,13 +108,13 @@ async function processAutoSave(message,ownerId) {
     await c.query('INSERT INTO saved_telegram_files(code,telegram_id,telegram_file_id,file_type,file_name) VALUES($1,$2,$3,$4,$5)',[code,owner,media.fileId,fileType==='photo'||fileType==='audio'?'document':fileType,safeFileName(media.fileName)]);
     let lecture,lectureNumber=null;
     if(media.kind==='video'){
-      const n=await c.query('SELECT count(*)::int AS total,coalesce(max(sort_order),-1)+1 AS next_order FROM lectures WHERE chapter_id=$1 AND unit_id IS NOT DISTINCT FROM $2::uuid',[session.chapter_id]);
+      const n=await c.query('SELECT count(*)::int AS total,coalesce(max(sort_order),-1)+1 AS next_order FROM lectures WHERE chapter_id=$1 AND unit_id IS NOT DISTINCT FROM $2::uuid',[session.chapter_id,session.unit_id]);
       lectureNumber=n.rows[0].total+1;
       const saved=await c.query('INSERT INTO lectures(chapter_id,unit_id,title,telegram_video_id,telegram_video_type,sort_order) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,title',[session.chapter_id,session.unit_id,autoTitle(message,lectureNumber),media.fileId,media.fileType||'video',n.rows[0].next_order]);
       lecture=saved.rows[0];
     }else{
       // Same legacy rule: attach PDFs to FIRST lecture lacking notes, not latest.
-      const found=await c.query('SELECT id,title FROM lectures WHERE chapter_id=$1 AND telegram_video_id IS NOT NULL AND telegram_notes_id IS NULL ORDER BY sort_order,created_at,id LIMIT 1 FOR UPDATE',[session.chapter_id]);
+      const found=await c.query('SELECT id,title FROM lectures WHERE chapter_id=$1 AND unit_id IS NOT DISTINCT FROM $2::uuid AND telegram_video_id IS NOT NULL AND telegram_notes_id IS NULL ORDER BY sort_order,created_at,id LIMIT 1 FOR UPDATE',[session.chapter_id,session.unit_id]);
       if(!found.rowCount)return {kind:'no_lecture',chapter:session.chapter_title,code,fileName:media.fileName};
       lecture=found.rows[0];
       await c.query('UPDATE lectures SET telegram_notes_id=$2 WHERE id=$1 AND telegram_notes_id IS NULL',[lecture.id,media.fileId]);
