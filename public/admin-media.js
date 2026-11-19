@@ -39,12 +39,31 @@ async function loadAutoSaveStatus(){
   document.getElementById('v2AutoNextUnit').disabled=!s.is_active;
   document.getElementById('v2AutoUndo').disabled=!s.is_active;
   document.getElementById('v2AutoLiveBadge').classList.toggle('hidden',!s.is_active);
+  const inline=document.getElementById('v2InlineAutoToggle'),inlineStatus=document.getElementById('v2InlineAutoStatus');
+  if(inline&&inlineStatus){inline.checked=Boolean(s.is_active);inlineStatus.innerHTML=el.innerHTML;inlineStatus.classList.toggle('active',Boolean(s.is_active));}
   const cfg=await api('/config');
   const link=document.getElementById('v2AutoSaveBotLink');
   if(cfg.botUsername){link.href='https://t.me/'+cfg.botUsername;link.classList.remove('hidden')}
   else{link.classList.add('hidden')}
   return s;
 }
+document.getElementById('v2InlineAutoMore').onclick=()=>document.querySelector('[data-panel="autosave"]').click();
+document.getElementById('v2InlineAutoToggle').onchange=async function(){
+ const active=this.checked;this.disabled=true;
+ try{
+  if(active){
+   const form=document.getElementById('adminLectureForm');
+   const chapterId=form.elements.chapterId.value,unitId=form.elements.unitId?.value||null;
+   if(!chapterId)throw new Error('Pehle Batch, Subject aur Chapter select karo');
+   await api('/admin/auto-save/start',{method:'POST',body:JSON.stringify({chapterId,unitId})});
+   toast('🤖 Auto Mode ON. Bot ko video/PDF bhejo');
+  }else{
+   await api('/admin/auto-save/stop',{method:'POST',body:'{}'});
+   toast('🤖 Auto Mode OFF');
+  }
+  await loadAutoSaveStatus();
+ }catch(err){this.checked=!active;toast(err.message);}finally{this.disabled=false}
+};
 document.getElementById('adminAutoSaveForm').onsubmit=async function(event){
   event.preventDefault();
   const chapterId=this.elements.chapterId.value;
@@ -71,7 +90,7 @@ document.getElementById('v2AutoUndo').onclick=async()=>{
 };
 let v2AutoRefreshBusy=false;
 setInterval(async()=>{
- if(state.page!=='admin-editor'||document.querySelector('[data-admin-section="autosave"]')?.classList.contains('hidden')||v2AutoRefreshBusy)return;
+ if(state.page!=='admin-editor'||(document.querySelector('[data-admin-section="autosave"]')?.classList.contains('hidden')&&document.querySelector('[data-admin-section="lecture"]')?.classList.contains('hidden'))||v2AutoRefreshBusy)return;
  v2AutoRefreshBusy=true;
  try{await loadAutoSaveStatus()}catch{}finally{v2AutoRefreshBusy=false}
 },6000);
