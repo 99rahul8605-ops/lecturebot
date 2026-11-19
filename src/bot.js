@@ -13,6 +13,13 @@ function createBot({token,webUrl,ownerId}) {
         const inviter=arg.slice(4);
         if(inviter!==id) await query(`INSERT INTO referrals(inviter_id,invitee_id) SELECT $1,$2 WHERE EXISTS(SELECT 1 FROM app_users WHERE telegram_id=$1) ON CONFLICT(invitee_id) DO NOTHING`,[inviter,id]);
       }
+      if(/^grp_[a-f0-9]{16}$/.test(arg)){
+        const inviteCode=arg.slice(4);
+        const group=await query('SELECT id,name FROM study_groups WHERE invite_code=$1',[inviteCode]);
+        if(!group.rowCount)return bot.sendMessage(msg.chat.id,'Group invite is invalid or expired.');
+        await query('INSERT INTO group_members(group_id,telegram_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[group.rows[0].id,id]);
+        return bot.sendMessage(msg.chat.id,'✅ Joined '+escapeHtml(group.rows[0].name)+'! Open the learning app to study with your group.',{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'📚 Open Learning App',web_app:{url:webUrl}}]]}});
+      }
       if(/^lec_[a-f0-9-]{36}$/.test(arg)){
         const {rows}=await query(`SELECT l.title,l.telegram_video_id,l.is_premium,b.is_premium AS batch_premium,b.id AS batch_id FROM lectures l JOIN chapters c ON c.id=l.chapter_id JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id WHERE l.id=$1 AND b.is_published=true`,[arg.slice(4)]);
         const lec=rows[0]; if(!lec)return bot.sendMessage(msg.chat.id,'Lecture not found.');
