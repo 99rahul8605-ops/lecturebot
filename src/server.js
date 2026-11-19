@@ -9,7 +9,7 @@ const {Server}=require('socket.io');
 const {query,transaction,pool}=require('./db');
 const {verifyTelegramInitData}=require('./auth');
 const {createBot}=require('./bot');
-const {getAutoSaveStatus,startAutoSave,stopAutoSave,nextChapter,undoAutoSave}=require('./auto-save');
+const {getAutoSaveStatus,startAutoSave,stopAutoSave,nextChapter,nextUnit,undoAutoSave}=require('./auto-save');
 const {mountV2Features}=require('./v2-features');
 const app=express();const httpServer=createServer(app);
 app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'32kb'}));
@@ -41,6 +41,10 @@ api.get('/me',async(req,res,next)=>{try{
 api.get('/batches',async(req,res,next)=>{try{const {rows}=await query(`SELECT b.id,b.title,b.description,b.cover_url,b.is_premium,count(DISTINCT s.id)::int AS subjects_count FROM batches b LEFT JOIN subjects s ON s.batch_id=b.id WHERE b.is_published=true OR $1=true GROUP BY b.id ORDER BY b.sort_order,b.title`,[req.user.id===OWNER_ID]);res.json(rows);}catch(e){next(e);}});
 api.get('/batches/:id/subjects',async(req,res,next)=>{try{const {rows}=await query(`SELECT s.id,s.title,s.icon,count(c.id)::int AS chapter_count FROM subjects s JOIN batches b ON b.id=s.batch_id LEFT JOIN chapters c ON c.subject_id=s.id WHERE s.batch_id=$1 AND (b.is_published OR $2=true) GROUP BY s.id ORDER BY s.sort_order,s.title`,[req.params.id,req.user.id===OWNER_ID]);res.json(rows);}catch(e){next(e);}});
 api.get('/subjects/:id/chapters',async(req,res,next)=>{try{const {rows}=await query(`SELECT c.id,c.title,count(l.id)::int AS lecture_count,count(p.lecture_id)::int AS completed_count FROM chapters c JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id LEFT JOIN lectures l ON l.chapter_id=c.id LEFT JOIN lecture_progress p ON p.lecture_id=l.id AND p.telegram_id=$2 WHERE c.subject_id=$1 AND (b.is_published OR $3=true) GROUP BY c.id ORDER BY c.sort_order,c.title`,[req.params.id,req.user.id,req.user.id===OWNER_ID]);res.json(rows);}catch(e){next(e);}});
+api.get('/chapters/:id/units',async(req,res,next)=>{try{
+ const {rows}=await query('SELECT u.id,u.title,u.sort_order,count(l.id)::int AS lecture_count FROM units u JOIN chapters c ON c.id=u.chapter_id JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id LEFT JOIN lectures l ON l.unit_id=u.id WHERE u.chapter_id=$1 AND (b.is_published OR $2=true) GROUP BY u.id ORDER BY u.sort_order,u.title,u.id',[req.params.id,req.user.id===OWNER_ID]);
+ res.json(rows);
+}catch(e){next(e);}});
 api.get('/chapters/:id/lectures',async(req,res,next)=>{try{const {rows}=await query(`SELECT l.id,l.title,l.is_premium,(l.telegram_video_id IS NOT NULL) AS has_video,(l.telegram_notes_id IS NOT NULL) AS has_notes,(p.lecture_id IS NOT NULL) AS completed,(b.is_premium OR l.is_premium) AS locked,(a.telegram_id IS NOT NULL) AS access_granted FROM lectures l JOIN chapters c ON c.id=l.chapter_id JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id LEFT JOIN lecture_progress p ON p.lecture_id=l.id AND p.telegram_id=$2 LEFT JOIN batch_access a ON a.batch_id=b.id AND a.telegram_id=$2 AND (a.expires_at IS NULL OR a.expires_at>now()) WHERE c.id=$1 AND (b.is_published OR $3=true) ORDER BY l.sort_order,l.created_at`,[req.params.id,req.user.id,req.user.id===OWNER_ID]);res.json(rows.map(r=>({...r,locked:r.locked&&!r.access_granted&&req.user.id!==OWNER_ID})));}catch(e){next(e);}});
 api.post('/lectures/:id/complete',async(req,res,next)=>{try{const found=await query(`SELECT l.id,b.is_published,(b.is_premium OR l.is_premium) AS premium, a.telegram_id IS NOT NULL AS access FROM lectures l JOIN chapters c ON c.id=l.chapter_id JOIN subjects s ON s.id=c.subject_id JOIN batches b ON b.id=s.batch_id LEFT JOIN batch_access a ON a.batch_id=b.id AND a.telegram_id=$2 AND (a.expires_at IS NULL OR a.expires_at>now()) WHERE l.id=$1`,[req.params.id,req.user.id]);const l=found.rows[0];if(!l||(!l.is_published&&req.user.id!==OWNER_ID))return res.status(404).json({error:'Not found'});if(l.premium&&!l.access&&req.user.id!==OWNER_ID)return res.status(403).json({error:'Premium access required'});await query('INSERT INTO lecture_progress(telegram_id,lecture_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[req.user.id,req.params.id]);res.json({ok:true});}catch(e){next(e);}});
 api.post('/deliveries',async(req,res,next)=>{try{
@@ -77,6 +81,12 @@ function owner(req,res,next){if(req.user.id!==OWNER_ID)return res.sendStatus(403
 api.post('/admin/batches',owner,async(req,res,next)=>{try{const title=String(req.body?.title||'').trim();if(!title||title.length>120)return res.status(400).json({error:'Invalid title'});const {rows}=await query('INSERT INTO batches(title,description,is_published,is_premium) VALUES($1,$2,false,$3) RETURNING *',[title,String(req.body?.description||'').slice(0,500),!!req.body?.isPremium]);res.status(201).json(rows[0]);}catch(e){next(e);}});
 api.post('/admin/subjects',owner,async(req,res,next)=>{try{const title=String(req.body?.title||'').trim();if(!title||title.length>120)return res.status(400).json({error:'Invalid title'});const {rows}=await query('INSERT INTO subjects(batch_id,title) VALUES($1,$2) RETURNING *',[req.body?.batchId,title]);res.status(201).json(rows[0]);}catch(e){next(e);}});
 api.post('/admin/chapters',owner,async(req,res,next)=>{try{const title=String(req.body?.title||'').trim();if(!title||title.length>120)return res.status(400).json({error:'Invalid title'});const {rows}=await query('INSERT INTO chapters(subject_id,title,sort_order) VALUES($1,$2,COALESCE((SELECT max(sort_order)+1 FROM chapters WHERE subject_id=$1),0)) RETURNING *',[req.body?.subjectId,title]);res.status(201).json(rows[0]);}catch(e){next(e);}});
+api.post('/admin/units',owner,async(req,res,next)=>{try{
+ const title=String(req.body?.title||'').trim(),chapterId=String(req.body?.chapterId||'');
+ if(!title||title.length>120||!/^[a-f0-9-]{36}$/i.test(chapterId))return res.status(400).json({error:'Choose a chapter and Unit name'});
+ const {rows}=await query('INSERT INTO units(chapter_id,title,sort_order) VALUES($1,$2,COALESCE((SELECT max(sort_order)+1 FROM units WHERE chapter_id=$1),0)) RETURNING id,title,chapter_id',[chapterId,title]);
+ res.status(201).json(rows[0]);
+}catch(e){next(e);}});
 api.post('/admin/lectures',owner,async(req,res,next)=>{try{const title=String(req.body?.title||'').trim();if(!title||title.length>120)return res.status(400).json({error:'Invalid title'});const {rows}=await query('INSERT INTO lectures(chapter_id,title,telegram_video_id,telegram_notes_id) VALUES($1,$2,$3,$4) RETURNING id,title',[req.body?.chapterId,title,req.body?.videoFileId||null,req.body?.notesFileId||null]);res.status(201).json(rows[0]);}catch(e){next(e);}});
 api.post('/admin/batches/:id/publish',owner,async(req,res,next)=>{try{const {rows}=await query('UPDATE batches SET is_published=$2 WHERE id=$1 RETURNING id,is_published',[req.params.id,req.body?.published===true]);if(!rows.length)return res.sendStatus(404);res.json(rows[0]);}catch(e){next(e);}});
 // Owner-only test admin media automation and batch cover image API.
@@ -87,7 +97,9 @@ api.post('/admin/auto-save/start',owner,async(req,res,next)=>{
  try{
   const chapterId=req.body?.chapterId;
   if(typeof chapterId!=='string'||!/^[a-f0-9-]{36}$/i.test(chapterId))return res.status(400).json({error:'Choose a valid chapter'});
-  const session=await startAutoSave(req.user.id,chapterId);
+  const unitId=req.body?.unitId||null;
+  if(unitId!==null&&(typeof unitId!=='string'||!/^[a-f0-9-]{36}$/i.test(unitId)))return res.status(400).json({error:'Invalid Unit ID'});
+  const session=await startAutoSave(req.user.id,chapterId,unitId);
   if(!session)return res.status(404).json({error:'Chapter not found'});
   res.json(session);
  }catch(e){next(e);}
@@ -97,6 +109,9 @@ api.post('/admin/auto-save/stop',owner,async(req,res,next)=>{
 });
 api.post('/admin/auto-save/next-chapter',owner,async(req,res,next)=>{
  try{const result=await nextChapter(req.user.id);if(result.error)return res.status(409).json(result);res.json(result);}catch(e){next(e);}
+});
+api.post('/admin/auto-save/next-unit',owner,async(req,res,next)=>{
+ try{const result=await nextUnit(req.user.id);if(result.error)return res.status(409).json(result);res.json(result);}catch(e){next(e);}
 });
 api.post('/admin/auto-save/undo',owner,async(req,res,next)=>{
  try{const result=await undoAutoSave(req.user.id);if(result.error)return res.status(409).json(result);res.json(result);}catch(e){next(e);}
