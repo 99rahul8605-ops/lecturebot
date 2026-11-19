@@ -6,11 +6,11 @@ const {query,transaction}=require('./db');
 const validUuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 function classifyMedia(msg) {
   if(msg.video?.file_id)return {kind:'video',fileId:msg.video.file_id,fileName:msg.video.file_name||'video.mp4'};
-  if(msg.video_note?.file_id)return {kind:'video',fileId:msg.video_note.file_id,fileName:'video_note.mp4'};
+  
   if(msg.document?.file_id) {
     const mime=String(msg.document.mime_type||'').toLowerCase(),name=String(msg.document.file_name||'').toLowerCase();
     if(mime==='application/pdf'||name.endsWith('.pdf'))return {kind:'pdf',fileId:msg.document.file_id,fileName:msg.document.file_name||'notes.pdf'};
-    if(mime.startsWith('video/')||/\.(mp4|mkv|mov|webm|avi)$/.test(name))return {kind:'video',fileId:msg.document.file_id,fileName:msg.document.file_name||'video.mp4'};
+    if(mime.startsWith('video/')||/\.(mp4|mkv|mov|webm|avi)$/.test(name))return {kind:'video',fileId:msg.document.file_id,fileName:msg.document.file_name||'video.mp4',fileType:'document'};
   }
   return null;
 }
@@ -96,7 +96,7 @@ async function processAutoSave(message,ownerId) {
     if(media.kind==='video'){
       const n=await c.query('SELECT count(*)::int AS total,coalesce(max(sort_order),-1)+1 AS next_order FROM lectures WHERE chapter_id=$1',[session.chapter_id]);
       lectureNumber=n.rows[0].total+1;
-      const saved=await c.query('INSERT INTO lectures(chapter_id,title,telegram_video_id,sort_order) VALUES($1,$2,$3,$4) RETURNING id,title',[session.chapter_id,autoTitle(message,lectureNumber),media.fileId,n.rows[0].next_order]);
+      const saved=await c.query('INSERT INTO lectures(chapter_id,title,telegram_video_id,telegram_video_type,sort_order) VALUES($1,$2,$3,$4,$5) RETURNING id,title',[session.chapter_id,autoTitle(message,lectureNumber),media.fileId,media.fileType||'video',n.rows[0].next_order]);
       lecture=saved.rows[0];
     }else{
       // Same legacy rule: attach PDFs to FIRST lecture lacking notes, not latest.
