@@ -71,9 +71,9 @@
  </section>
  <section class="view" id="view-admin-editor"> <div class="admin-detail" id="adminDetail"><div class="editor-top"><button type="button" class="admin-back" id="adminBack">← Admin dashboard</button><div class="eyebrow">ADMIN · CONTENT</div><h1 id="adminEditorTitle">Add content</h1></div>
  <form id="adminBatchForm" class="admin-form hidden" data-admin-section="batch"><h3>New batch</h3><label>Batch name</label><input name="title" placeholder="e.g. CA Inter Group 1" required><label>Description</label><textarea name="description" placeholder="Describe this batch"></textarea><label>Batch cover image (JPEG / PNG / WebP)</label><input name="coverImage" type="file" accept="image/jpeg,image/png,image/webp"><img id="v2BatchCoverPreview" class="v2-cover-preview hidden" alt="Batch cover preview"><label class="check-label"><input type="checkbox" name="premium"> Premium batch</label><button class="pill black">Create draft batch ↗</button></form>
- <form id="adminAutoSaveForm" class="admin-form hidden" data-admin-section="autosave"><h3>Auto Save from Telegram</h3>
- <p class="muted">Choose Batch → Subject → Chapter. Then send your videos/PDFs to the new TEST bot's private chat. Videos create lectures in order; PDFs attach to the first lecture with no notes.</p>
- <div class="v2-autosave-status" id="v2AutoSaveStatus">Checking current session…</div>
+ <form id="adminAutoSaveForm" class="admin-form hidden" data-admin-section="autosave"><div class="v2-autosave-title"><h3>🤖 Auto Mode</h3><span class="v2-autosave-live hidden" id="v2AutoLiveBadge">LIVE</span></div>
+ <p class="muted">Choose Batch → Subject → Chapter. Then send your videos/PDFs to the new TEST bot's private chat. Videos are named Lecture 1, Lecture 2…; PDFs attach to the first lecture with no notes. Use /nextchapter and /undo in bot, or buttons below.</p>
+ <div class="v2-autosave-status" id="v2AutoSaveStatus">Checking current session…</div><div class="v2-autosave-legacy-actions"><button type="button" id="v2AutoNextChapter" class="v2-subtle">➡ Next Chapter</button><button type="button" id="v2AutoUndo" class="v2-subtle">↩ Undo Last Save</button></div>
  <label>Batch</label><select class="admin-batch-select admin-parent-batch" required><option value="">Choose batch</option></select>
  <label>Subject</label><select class="admin-subject-select admin-parent-subject" required><option value="">Choose subject</option></select>
  <label>Chapter</label><select name="chapterId" class="admin-chapter-select" required><option value="">Choose chapter</option></select>
