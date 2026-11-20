@@ -1,5 +1,15 @@
 # EduBot update: Study tab, multi-select lectures, new backend
 
+## Update 2 (this release)
+* **Chat fixes:** the message box was rebuilt every 4s poll (typed text vanished), it sat behind the bottom nav,
+  and load errors were silent. Now: the box is only rebuilt when your "can I write?" state changes, it sits above
+  the nav, and an error message is shown if the chat can't load.
+* **New look ("Focus")** via `public/theme-focus.css` (loaded last): cream/ink/lime tokens for light + dark,
+  pastel bento batch tiles, segmented tabs, floating dock navigation, rounded rows, chapter progress bars,
+  and a "Today's study" card on Home (daily target ring from the Study backend).
+  Light (cream) is now the default for people who never picked a theme. To turn the new look off, delete the
+  `<link href="/theme-focus.css">` line in `public/index.html`.
+
 ## New files
 | File | What it is |
 |---|---|
@@ -8,6 +18,7 @@
 | `public/study.js` | Study tab UI: timer, plan (target / subjects / to-do), stats |
 | `public/study-social.js` | Groups, Global Room, group timers + chat, admin/co-admin management |
 | `public/study.css` | Study tab styles (uses the app's existing theme variables) |
+| `public/theme-focus.css` | The new visual theme (tokens + component overrides) |
 | `public/lecture-picker.js/.css` | Lectures / Notes big buttons + multi-select popup |
 
 ## Changed files

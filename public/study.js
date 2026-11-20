@@ -436,6 +436,20 @@
   }
   S.ACT.range = function (el) { statRange = el.getAttribute('data-r'); renderStats(); };
 
+  // ── Home page "Today's study" card ──────────────────────────────────────────
+  S.homeCard = async function () {
+    var el = $('homeStudyCard'); if (!el) return;
+    try {
+      var me = await S.api('/me'); S.me = me;
+      var tgt = me.profile.dailyTargetMin * 60, done = me.summary.totalSec, pct = Math.min(100, Math.round(done / tgt * 100));
+      el.innerHTML = '<div class="hs-ring"><svg viewBox="0 0 96 96"><circle class="bg" cx="48" cy="48" r="40"/><circle class="fg" cx="48" cy="48" r="40" stroke-dasharray="251" stroke-dashoffset="' + (251 * (1 - pct / 100)) + '" transform="rotate(-90 48 48)"/></svg><b>' + pct + '%</b></div>' +
+        '<div class="hs-txt"><div class="hs-eyebrow">TODAY\'S STUDY</div><div class="hs-big">' + S.dur(done) + '</div><div class="hs-sub">of ' + S.dur(tgt) + ' target' + (me.streak ? ' \u00b7 ' + me.streak + ' day streak' : '') + '</div></div>' +
+        '<button class="hs-btn" aria-label="Open Study">' + (T.phase !== 'idle' ? 'Running' : 'Study') + '</button>';
+      el.style.display = 'flex';
+    } catch (_) { el.style.display = 'none'; }                 // not logged in yet / offline: just hide the card
+  };
+  (function bootHome() { var n = 0; (function t() { if (tg && tg.initData) S.homeCard(); else if (n++ < 12) setTimeout(t, 500); })(); })();
+
   // Resume loops if a timer was already running when the page loaded
   document.addEventListener('visibilitychange', function () { if (!document.hidden && T.phase !== 'idle') { tick(); beat(); } });
 })();

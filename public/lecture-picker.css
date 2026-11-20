@@ -1,7 +1,7 @@
 /* lecture-picker.css : Lectures / Notes big buttons + multi-select sheet */
 .lp-wrap{display:flex;flex-direction:column;gap:12px;padding:4px 0 16px}
 .lp-big{display:flex;align-items:center;gap:14px;width:100%;min-height:96px;padding:0 18px;border:0;border-radius:24px;text-align:left;cursor:pointer;color:var(--text);background:var(--surface2);font-family:inherit}
-.lp-big-lec{background:var(--accent);color:#fff}
+.lp-big-lec{background:var(--accent);color:var(--on-accent,#fff)}
 .lp-big-notes{background:var(--surface2);border:1px solid var(--border)}
 .lp-ico{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;background:rgba(255,255,255,.2)}
 .lp-big-notes .lp-ico{background:var(--surface3)}
@@ -29,7 +29,7 @@
 .lp-no{width:32px;height:32px;border-radius:10px;background:var(--surface3);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex-shrink:0}
 .lp-nm{flex:1;min-width:0;font-size:12px;font-weight:600;line-height:1.2;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .lp-card.lp-on{background:var(--text);color:var(--bg);border-color:var(--text)}
-.lp-card.lp-on .lp-no{background:var(--accent);color:#fff}
+.lp-card.lp-on .lp-no{background:var(--accent);color:var(--on-accent,#fff)}
 .lp-card.lp-done{border-color:var(--green)}
 .lp-dim-ic{color:var(--green)}
 .lp-card.lp-cs{opacity:.55;border-style:dashed;background:transparent;cursor:default}
@@ -37,5 +37,5 @@
 .lp-foot{display:flex;align-items:center;gap:12px;padding-top:12px;border-top:1px solid var(--border)}
 .lp-count{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0}
 .lp-count b{font-size:15px}.lp-count small{font-size:12px;color:var(--text2);font-weight:600}
-.lp-send{display:flex;align-items:center;gap:8px;height:52px;padding:0 22px;border:0;border-radius:26px;background:var(--accent);color:#fff;font-size:15px;font-weight:800;cursor:pointer;font-family:inherit}
+.lp-send{display:flex;align-items:center;gap:8px;height:52px;padding:0 22px;border:0;border-radius:26px;background:var(--accent);color:var(--on-accent,#fff);font-size:15px;font-weight:800;cursor:pointer;font-family:inherit}
 .lp-send:disabled{opacity:.45;cursor:default}

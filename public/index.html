@@ -441,6 +441,10 @@ body.ready{transition:none}
 </style>
 <link rel="stylesheet" href="/lecture-picker.css">
 <link rel="stylesheet" href="/study.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&family=DM+Sans:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="/theme-focus.css">
 </head>
 <body>
 
@@ -539,8 +543,8 @@ body.ready{transition:none}
 <div class="page active" id="page-home">
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;flex:1">
-      <div style="width:34px;height:34px;background:linear-gradient(135deg,#4f8ef7,#7c5cbf);border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:17px">📚</div>
-      <div><div style="font-size:15px;font-weight:700">EduBot</div><div style="font-size:10px;color:var(--text2)">Select Batch</div></div>
+      <div style="width:34px;height:34px;background:linear-gradient(135deg,#4f8ef7,#7c5cbf);border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:17px"><i class="ti ti-books"></i></div>
+      <div><div style="font-size:15px;font-weight:700">EduBot</div><div style="font-size:12px;color:var(--text2)">Aaj kya padhna hai?</div></div>
       <span id="adsFreeBadge" style="display:none;font-size:9px;font-weight:700;color:#fff;padding:3px 8px;border-radius:20px;cursor:pointer;white-space:nowrap;align-items:center;gap:3px" onclick="openAdsFreePromo()">✨ Ads-Free</span>
     </div>
     <button class="admin-btn" id="adminBtn" onclick="openAdmin()"><i class="ti ti-settings" style="font-size:13px"></i> Admin</button>
@@ -572,6 +576,7 @@ body.ready{transition:none}
     </div>
   </div>
   <div class="page-body">
+    <div id="homeStudyCard" class="hs-card" style="display:none" role="button" tabindex="0" onclick="switchNavTab('study')"></div>
     <div id="accessBanner"></div>
     <div id="lockedMsg" style="display:none;text-align:center;padding:40px 20px;color:var(--text2)">
       <i class="ti ti-lock" style="font-size:40px;color:var(--text3);display:block;margin-bottom:12px"></i>
@@ -1273,6 +1278,23 @@ function openBatch(bid) {
 }
 
 // ── Open Subject ──────────────────────────────────────────────────────────────
+// Watched progress for a chapter (counts lectures inside units too)
+function _chapLectures(c) {
+  var all = (c.lectures || []).slice();
+  (c.units || []).forEach(function (u) { all = all.concat(u.lectures || []); });
+  return all.filter(function (l) { return !l.comingSoon; });
+}
+function _chapDoneText(c) {
+  var all = _chapLectures(c); if (!all.length) return '';
+  var d = all.filter(function (l) { return isLectureWatched(l._id); }).length;
+  return d ? ' \u00b7 ' + d + ' done' : '';
+}
+function _chapBarHtml(c) {
+  var all = _chapLectures(c); if (!all.length) return '';
+  var d = all.filter(function (l) { return isLectureWatched(l._id); }).length;
+  return '<div class="chap-bar"><div style="width:' + Math.round(d / all.length * 100) + '%"></div></div>';
+}
+
 function openSubject(bid, sid) {
   _currentOpenBid = bid; _currentOpenSid = sid; _currentOpenCid = null; _currentOpenUid = null;
   var b = batches.find(x => x._id === bid);
@@ -1287,7 +1309,8 @@ function openSubject(bid, sid) {
         <div class="chap-num" style="background:${s.color}">${i+1}</div>
         <div class="chap-info">
           <div class="chap-name">${c.name}</div>
-          <div class="chap-sub">${c.units.length ? c.units.length+' units' : c.lectures.length+' lectures'}</div>
+          <div class="chap-sub">${c.units.length ? c.units.length+' units' : c.lectures.length+' lectures'}${_chapDoneText(c)}</div>
+          ${_chapBarHtml(c)}
         </div>
         <i class="ti ti-chevron-right row-arrow"></i>
       </div>`).join('');
@@ -2219,7 +2242,7 @@ function toggleTheme(isLight) {
 
 function initTheme() {
   var saved = localStorage.getItem('edubot_theme');
-  if (saved === 'light') {
+  if (saved !== 'dark') {                 // new look: cream/light unless the user chose dark
     document.body.classList.add('light-mode');
     var toggle = document.getElementById('themeToggle');
     if (toggle) toggle.checked = true;
@@ -4464,6 +4487,7 @@ function switchNavTab(tab) {
   }
 
   if (tab === 'home') {
+    if (window.Study && Study.homeCard) Study.homeCard();
     var homeEl = document.getElementById('page-home');
     // Deactivate ALL pages instantly, then bring home forward cleanly
     document.querySelectorAll('.page').forEach(function(p) {

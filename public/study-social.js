@@ -179,27 +179,40 @@
   // ── chat ──
   function startChat() {
     $('gBody').innerHTML = '<div id="gPin"></div><div class="st-chat" id="gChat"></div><div class="st-compose" id="gCompose"></div>';
-    G.cursor = null; G.msgs = [];
+    G.cursor = null; G.msgs = []; G.fail = 0; composeKey = null; busy = false;
     S.poll(loadMsgs, 4000);
     S.polls.push(setInterval(function () { if (G.view === 'chat') loadGroupMetaQuiet(); }, 20000));
   }
   async function loadGroupMetaQuiet() { try { var d = await S.api('/groups/' + G.id); G.meta = d.group; G.members = d.members; G.role = d.group.role; } catch (_) {} }
-  var busy = false;
+  var busy = false, composeKey = null;
+  var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+  function scrollPageBottom() { var sc = $('stScroll'); if (sc) sc.scrollTop = sc.scrollHeight; }
   async function loadMsgs() {
     if (busy || G.view !== 'chat') return; busy = true;
     try {
       var d = await S.api('/groups/' + G.id + '/messages?limit=60' + (G.cursor ? '&after=' + G.cursor : ''));
       var box = $('gChat'); if (!box) return;
-      var atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80 || !G.cursor;
-      if (d.items.length) { G.msgs = G.cursor ? G.msgs.concat(d.items) : d.items; G.cursor = G.msgs[G.msgs.length - 1].id; paintChat(); if (atBottom) box.scrollTop = box.scrollHeight; }
-      $('gPin').innerHTML = d.pinned ? '<div class="st-pinned"><i class="ti ti-pin"></i><span>' + esc(d.pinned.text) + '</span></div>' : '';
-      var c = $('gCompose');
-      c.innerHTML = d.canPost
-        ? '<input id="gMsg" maxlength="500" placeholder="Write a message\u2026" aria-label="Message"><button data-act="sendMsg" aria-label="Send"><i class="ti ti-send"></i></button>'
-        : '<div class="st-muted st-center">' + (d.mutedUntil ? 'You are muted in this group for now.' : 'Only admins can chat right now.') + '</div>';
-      if (!c.getAttribute('data-bound') && $('gMsg')) { c.setAttribute('data-bound', '1'); }
-    } catch (e) { /* transient; next poll retries */ } finally { busy = false; }
+      G.fail = 0;
+      var first = !G.cursor;
+      var atBottom = first || box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+      if (d.items.length) { G.msgs = first ? d.items : G.msgs.concat(d.items); G.cursor = G.msgs[G.msgs.length - 1].id; paintChat(); if (atBottom) box.scrollTop = box.scrollHeight; }
+      else if (first) paintChat();
+      if ($('gPin')) $('gPin').innerHTML = d.pinned ? '<div class="st-pinned"><i class="ti ti-pin"></i><span>' + esc(d.pinned.text) + '</span></div>' : '';
+      // The input box is only rebuilt when the "can I write?" state changes, so typing is never wiped by a poll.
+      var key = d.canPost ? 'ok' : (d.mutedUntil ? 'muted' : 'admins'), c = $('gCompose');
+      if (c && key !== composeKey) {
+        composeKey = key;
+        c.innerHTML = d.canPost
+          ? '<input id="gMsg" maxlength="500" placeholder="Write a message\u2026" aria-label="Message" enterkeyhint="send" autocomplete="off"><button data-act="sendMsg" aria-label="Send"><i class="ti ti-send"></i></button>'
+          : '<div class="st-muted st-center" style="width:100%">' + (d.mutedUntil ? 'You are muted in this group for now.' : 'Only admins can chat right now.') + '</div>';
+      }
+      if (first) scrollPageBottom();
+    } catch (e) {
+      G.fail = (G.fail || 0) + 1;
+      if (G.fail >= 2 && $('gChat') && !G.msgs.length) $('gChat').innerHTML = '<div class="st-empty">Chat could not load (' + esc(S.err(e)) + '). Retrying\u2026</div>';
+    } finally { busy = false; }
   }
+  async function refreshMsgs() { for (var i = 0; i < 12 && busy; i++) await sleep(150); await loadMsgs(); }
   function paintChat() {
     $('gChat').innerHTML = G.msgs.map(function (m) {
       if (m.kind === 'system') return '<div class="st-sys">' + esc(m.text) + '</div>';
@@ -209,10 +222,12 @@
     }).join('') || '<div class="st-empty">No messages yet. Say hello!</div>';
   }
   ACT.sendMsg = async function () {
-    var inp = $('gMsg'); if (!inp) return; var text = inp.value.trim(); if (!text) return;
-    inp.value = '';
-    try { await S.api('/groups/' + G.id + '/messages', 'POST', { text: text }); await loadMsgs(); var b = $('gChat'); if (b) b.scrollTop = b.scrollHeight; }
-    catch (e) { inp.value = text; S.say(S.err(e), 'error'); }
+    var inp = $('gMsg'); if (!inp || inp.getAttribute('data-sending')) return;
+    var text = inp.value.trim(); if (!text) return;
+    inp.setAttribute('data-sending', '1'); inp.value = '';
+    try { await S.api('/groups/' + G.id + '/messages', 'POST', { text: text }); await refreshMsgs(); scrollPageBottom(); }
+    catch (e) { var i2 = $('gMsg'); if (i2 && !i2.value) i2.value = text; S.say(S.err(e), 'error'); }
+    finally { var i3 = $('gMsg'); if (i3) { i3.removeAttribute('data-sending'); i3.focus(); } }
   };
   document.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey && e.target && e.target.id === 'gMsg') { e.preventDefault(); ACT.sendMsg(); } });
 
