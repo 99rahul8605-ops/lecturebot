@@ -1,0 +1,2165 @@
+const express = require("express");
+const router = express.Router();
+const crypto = require("crypto");
+const mongoose = require("mongoose");
+const Batch = require("../models/Course");
+const db = require("../sqlite-manager");
+
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const OWNER_ID = parseInt(process.env.OWNER_ID || "0");
+// Real-time activity log group — same one server.js posts lecture-call logs
+// to. Referral events get logged here too (see /refer/record below).
+const LOGS_GROUP_ID = process.env.LOGS_GROUP_ID ? parseInt(process.env.LOGS_GROUP_ID) : null;
+// Set by server.js once the bot is initialized (bot doesn't exist yet at require-time),
+// so giveaway confirmation/reversal notifications can be sent from here.
+let _bot = null;
+let _botUsername = process.env.BOT_USERNAME || "";
+function setBot(botInstance) {
+  _bot = botInstance;
+  if (!_botUsername && botInstance && typeof botInstance.getMe === "function") {
+    botInstance.getMe().then((me) => { _botUsername = me.username || ""; }).catch(() => {});
+  }
+}
+// Injected from server.js after grantAdsFreeAccess is defined there (same
+// setter pattern as setBot above) — lets the referral-based Ads-Free reward
+// below reuse the exact same grant logic Razorpay/Paytm/BharatPe purchases
+// use, instead of duplicating it here.
+let _grantAdsFreeAccess = null;
+function setGrantAdsFreeAccess(fn) { _grantAdsFreeAccess = fn; }
+// Optional notifier injected by server.js so zero-rupee Ads-Free grants can be
+// logged in the same payment group as paid subscriptions without coupling this
+// route module to Telegram/payment-group configuration.
+let _notifyFreeAdsFreeGrant = null;
+function setNotifyFreeAdsFreeGrant(fn) { _notifyFreeAdsFreeGrant = fn; }
+// Injected by server.js after the Telegram bot starts. Whenever the owner adds,
+// edits or removes a delegated admin, refresh that user's private-chat command
+// menu immediately. Delegated admins deliberately keep the same /start-only
+// command menu as normal users; only the owner sees management commands.
+let _syncBotCommandMenu = null;
+function setBotCommandMenuSync(fn) { _syncBotCommandMenu = typeof fn === 'function' ? fn : null; }
+function refreshBotCommandMenu(userId) {
+  if (!_syncBotCommandMenu) return;
+  Promise.resolve(_syncBotCommandMenu(String(userId))).catch((e) => console.error('Command menu refresh error:', e.message));
+}
+const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function formatIST(d) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true }).formatToParts(d);
+  const get = (t) => parts.find((p) => p.type === t).value;
+  return `${get('day')}/${get('month')}/${get('year')}, ${get('hour')}:${get('minute')}:${get('second')} ${get('dayPeriod').toLowerCase()}`;
+}
+// Formats "Name (@username)" or a fallback "User <id>" — same pattern used for
+// the multi-account and suspicious-activity alerts, kept consistent here too.
+function formatUserLabel(userId) {
+  const u = db.user.findOne(String(userId));
+  if (!u) return `User ${userId}`;
+  const name = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || `User ${userId}`;
+  return name + (u.username ? ` (@${u.username})` : '');
+}
+
+// ── Admin / role verification ───────────────────────────────────────────────
+// Admins are stored in SQLite's generic settings table so the owner can add or
+// revoke them instantly without a redeploy. The owner always has every power.
+const ADMIN_POWER_DEFS = [
+  { id: 'adminPanel', label: 'Admin Panel Access', description: 'Open and use the web admin panel (content, premium access, announcements, coupons and manual lecture management).' },
+  { id: 'forwardVideos', label: 'Forward Permission', description: 'Receive lecture videos without Telegram forward/save protection.' },
+  { id: 'uploadLectures', label: 'Upload Lecture', description: 'Upload files/lectures through the bot, use bulk upload, t.me import and auto-lecture upload commands.' },
+  { id: 'broadcast', label: 'Broadcast', description: 'Use /broadcast to send text or media to all users.' },
+  { id: 'myfiles', label: 'MyFiles Command', description: 'Use /myfiles and its pagination to view files uploaded by this admin.' },
+  { id: 'banUsers', label: 'Ban / Unban Users', description: 'Use /ban, /unban and /banned for user moderation.' },
+  { id: 'adsFreeSubscribers', label: 'Ads-Free Subscriber Control', description: 'Use /giveadsfree to add/reduce Ads-Free subscription time and /adsfreeusers to view active subscribers.' },
+  { id: 'viewStats', label: 'View Stats', description: 'Use /stats to view bot, content, access, referral and Ads-Free statistics.' },
+  { id: 'bypassDailyVideoLimit', label: 'Bypass 10 Video Limit', description: 'Remove the 10-videos-per-day watch limit for this admin. The 6-hour auto-delete and active-video cap stay unchanged.' },
+];
+const ADMIN_POWER_IDS = new Set(ADMIN_POWER_DEFS.map(p => p.id));
+
+function getAdminList() {
+  const raw = db.settings.get('web_admins', []);
+  return Array.isArray(raw) ? raw : [];
+}
+function saveAdminList(list) { db.settings.set('web_admins', list); }
+function getAdminRecord(userId) {
+  const uid = String(userId || '');
+  return getAdminList().find(a => String(a.userId) === uid && a.active !== false) || null;
+}
+function sanitizePermissions(perms) {
+  const arr = Array.isArray(perms) ? perms : [];
+  const out = [];
+  for (const p of arr) {
+    if (ADMIN_POWER_IDS.has(p)) out.push(p);
+    // Backward compatibility for admins created by older builds. Old web-panel
+    // permissions collapse into the new single Admin Panel Access switch.
+    if (['content','premium','announcements','coupons'].includes(p)) out.push('adminPanel');
+    if (p === 'autoLecture') { out.push('adminPanel'); out.push('uploadLectures'); }
+  }
+  return [...new Set(out)];
+}
+function hasAdminPower(userId, power) {
+  const n = Number(userId);
+  if (n && n === OWNER_ID) return true;
+  const rec = getAdminRecord(userId);
+  if (!rec) return false;
+  const perms = sanitizePermissions(rec.permissions);
+  if (perms.includes(power)) return true;
+  // Existing route names are kept as internal aliases so the owner-facing
+  // toggles remain simple without weakening backend authorization.
+  if (['content','premium','announcements','coupons'].includes(power)) return perms.includes('adminPanel');
+  if (power === 'autoLecture') return perms.includes('adminPanel') && perms.includes('uploadLectures');
+  // Registered sub-admins keep normal admin/viewer exemptions even when all
+  // operational powers are temporarily switched off.
+  if (power === 'bypassRestrictions') return true;
+  return false;
+}
+function isAnyAdmin(userId) {
+  const n = Number(userId);
+  if (n && n === OWNER_ID) return true;
+  return !!getAdminRecord(userId);
+}
+
+function getVerifiedWebAppUser(req) {
+  const initData = req.headers['x-tg-init-data'];
+  if (!initData) return null;
+  try {
+    const params = new URLSearchParams(initData);
+    const hash = params.get('hash');
+    if (!hash) return null;
+    params.delete('hash');
+    const dataCheckString = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join('\n');
+    const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
+    const expectedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+    if (expectedHash !== hash) return null;
+    const user = JSON.parse(params.get('user') || '{}');
+    return user && user.id ? user : null;
+  } catch (e) { return null; }
+}
+
+function verifyOwner(req, res, next) {
+  const user = getVerifiedWebAppUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (Number(user.id) !== OWNER_ID) return res.status(403).json({ error: 'Owner only' });
+  req.tgUser = user;
+  next();
+}
+
+function verifyPower(power) {
+  return function(req, res, next) {
+    const user = getVerifiedWebAppUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    if (!hasAdminPower(user.id, power)) return res.status(403).json({ error: `Missing admin permission: ${power}` });
+    req.tgUser = user;
+    next();
+  };
+}
+
+// Backwards-compatible alias for content-management routes. New non-content
+// admin features below use verifyPower(...) explicitly.
+const verifyAdmin = verifyPower('content');
+
+function isAdminRequest(req) {
+  const user = getVerifiedWebAppUser(req);
+  return !!user && hasAdminPower(user.id, 'content');
+}
+function getRequestUserId(req) {
+  const user = getVerifiedWebAppUser(req);
+  return user ? String(user.id) : null;
+}
+
+// Current role/permissions for the logged-in Telegram WebApp user.
+router.get('/admin/me', (req, res) => {
+  const user = getVerifiedWebAppUser(req);
+  if (!user) return res.json({ isOwner: false, isAdmin: false, permissions: [] });
+  const owner = Number(user.id) === OWNER_ID;
+  const rec = owner ? null : getAdminRecord(user.id);
+  const permissions = owner ? ADMIN_POWER_DEFS.map(p => p.id) : (rec ? sanitizePermissions(rec.permissions) : []);
+  res.json({ isOwner: owner, isAdmin: owner || !!rec, permissions });
+});
+
+// Owner-only admin manager. The owner cannot be removed or downgraded here.
+router.get('/admins', verifyOwner, (req, res) => {
+  res.json({ admins: getAdminList().map(a => ({ ...a, permissions: sanitizePermissions(a.permissions) })), powers: ADMIN_POWER_DEFS });
+});
+router.post('/admins', verifyOwner, (req, res) => {
+  const uid = String(req.body.userId || '').trim();
+  if (!/^\d+$/.test(uid)) return res.status(400).json({ error: 'Valid numeric Telegram user ID required' });
+  if (Number(uid) === OWNER_ID) return res.status(400).json({ error: 'Owner already has all permissions' });
+  const permissions = sanitizePermissions(req.body.permissions);
+  const list = getAdminList();
+  const idx = list.findIndex(a => String(a.userId) === uid);
+  const record = { userId: uid, label: String(req.body.label || '').trim().slice(0, 80), permissions, active: true, updatedAt: new Date().toISOString() };
+  if (idx >= 0) list[idx] = { ...list[idx], ...record }; else list.push(record);
+  saveAdminList(list);
+  refreshBotCommandMenu(uid);
+  res.json({ success: true, admin: record });
+});
+router.patch('/admins/:uid', verifyOwner, (req, res) => {
+  const uid = String(req.params.uid || '').trim();
+  const list = getAdminList();
+  const idx = list.findIndex(a => String(a.userId) === uid);
+  if (idx < 0) return res.status(404).json({ error: 'Admin not found' });
+  if (req.body.permissions !== undefined) {
+    const permissions = sanitizePermissions(req.body.permissions);
+    list[idx].permissions = permissions;
+  }
+  if (req.body.label !== undefined) list[idx].label = String(req.body.label || '').trim().slice(0, 80);
+  if (req.body.active !== undefined) list[idx].active = req.body.active !== false;
+  list[idx].updatedAt = new Date().toISOString();
+  saveAdminList(list);
+  refreshBotCommandMenu(uid);
+  res.json({ success: true, admin: { ...list[idx], permissions: sanitizePermissions(list[idx].permissions) } });
+});
+router.delete('/admins/:uid', verifyOwner, (req, res) => {
+  const uid = String(req.params.uid || '').trim();
+  const before = getAdminList();
+  const after = before.filter(a => String(a.userId) !== uid);
+  if (after.length === before.length) return res.status(404).json({ error: 'Admin not found' });
+  saveAdminList(after);
+  refreshBotCommandMenu(uid);
+  res.json({ success: true });
+});
+
+// ── Helper: strip premium links ───────────────────────────────────────────────
+function stripPremiumLinks(b) {
+  return {
+    ...b,
+    subjects: (b.subjects||[]).map(s => ({
+      ...s,
+      chapters: (s.chapters||[]).map(c => ({
+        ...c,
+        lectures: (c.lectures||[]).map(l => ({ ...l, link: l.isDemo ? l.link : '', notes: l.isDemo ? l.notes : '' })),
+        units: (c.units||[]).map(u => ({
+          ...u,
+          lectures: (u.lectures||[]).map(l => ({ ...l, link: l.isDemo ? l.link : '', notes: l.isDemo ? l.notes : '' }))
+        }))
+      }))
+    }))
+  };
+}
+
+// ── Helper: does this user have access to a premium batch? ───────────────────
+// Checks BOTH permanent access (admin/payment-granted premiumUsers list) AND
+// temporary reward-granted access (from the points-redemption system). Either
+// one is sufficient — this is the single source of truth used everywhere batch
+// content is gated, so the reward system and the permanent-access system never
+// have to be kept in sync manually.
+function hasPremiumAccess(userId, batch) {
+  if (!userId) return false;
+  if ((batch.premiumUsers || []).includes(userId)) return true;
+  return db.batchRewardAccess.hasAccess(userId, String(batch._id));
+}
+
+// ── Helper: save batch to MongoDB async (backup) ──────────────────────────────
+function _mongoBackupBatch(batchId) {
+  // Re-read from SQLite and push to MongoDB async — fire and forget
+  setImmediate(async () => {
+    try {
+      const data = db.batch.getOne(batchId);
+      if (!data) return;
+      await Batch.findByIdAndUpdate(batchId, data, { upsert: true });
+    } catch (e) { console.error('MongoDB batch backup error:', e.message); }
+  });
+}
+
+// ── Auto-Lecture Session ──────────────────────────────────────────────────────
+const autoLectureSession = db.autoLec.load();
+
+async function _saveAutoSession() {
+  db.autoLec.save(autoLectureSession);
+  // MongoDB backup
+  setImmediate(async () => {
+    try {
+      const AutoLecSession = mongoose.models.AutoLecSession;
+      if (AutoLecSession) await AutoLecSession.findByIdAndUpdate('singleton', { $set: autoLectureSession }, { upsert: true });
+    } catch (e) { console.error('AutoLecSession MongoDB backup error:', e.message); }
+  });
+}
+
+async function autoAddLecture({ batchId, subjectId, chapterId, unitId, name, link }) {
+  // Read from SQLite
+  const batchData = db.batch.getOne(batchId);
+  if (!batchData) throw new Error('Batch not found');
+
+  const subj = (batchData.subjects||[]).find(s => String(s._id) === subjectId);
+  if (!subj) throw new Error('Subject not found');
+  const chap = (subj.chapters||[]).find(c => String(c._id) === chapterId);
+  if (!chap) throw new Error('Chapter not found');
+
+  const newLec = { _id: new mongoose.Types.ObjectId().toString(), name, link, notes: '', order: 0, comingSoon: false, isDemo: false };
+
+  if (unitId) {
+    const unit = (chap.units||[]).find(u => String(u._id) === unitId);
+    if (!unit) throw new Error('Unit not found');
+    newLec.order = unit.lectures.length;
+    unit.lectures.push(newLec);
+  } else {
+    newLec.order = chap.lectures.length;
+    chap.lectures.push(newLec);
+  }
+
+  // Write to SQLite
+  db.batch.upsert(batchData);
+
+  // Write to MongoDB (source of truth backup) — reuse the SAME _id generated
+  // above so the SQLite and Mongo copies of this lecture stay addressable by
+  // the same id (needed so autoSetLectureNotes can find it in both later).
+  const mongoBatch = await Batch.findById(batchId);
+  if (mongoBatch) {
+    const ms = mongoBatch.subjects.id(subjectId);
+    const mc = ms && ms.chapters.id(chapterId);
+    if (mc) {
+      if (unitId) { const mu = mc.units.id(unitId); if (mu) mu.lectures.push({ _id: newLec._id, name, link, notes: '', order: mu.lectures.length, isDemo: false }); }
+      else mc.lectures.push({ _id: newLec._id, name, link, notes: '', order: mc.lectures.length, isDemo: false });
+      await mongoBatch.save();
+    }
+  }
+
+  return newLec._id;
+}
+
+// Find the earliest existing video lecture without notes in the selected chapter/unit.
+// Returned object is only a snapshot; the caller must pass its ID to autoSetLectureNotes.
+function autoFindFirstMissingNotes({ batchId, subjectId, chapterId, unitId }) {
+  const batchData = db.batch.getOne(batchId);
+  if (!batchData) throw new Error('Batch not found');
+  const subj = (batchData.subjects || []).find(s => String(s._id) === String(subjectId));
+  if (!subj) throw new Error('Subject not found');
+  const chap = (subj.chapters || []).find(c => String(c._id) === String(chapterId));
+  if (!chap) throw new Error('Chapter not found');
+  const unit = unitId ? (chap.units || []).find(u => String(u._id) === String(unitId)) : null;
+  if (unitId && !unit) throw new Error('Unit not found');
+  const lectures = (unit ? unit.lectures : chap.lectures) || [];
+  const ordered = lectures.map((lecture, index) => ({ lecture, index }))
+    .sort((a, b) => (Number(a.lecture.order ?? a.index) - Number(b.lecture.order ?? b.index)) || a.index - b.index);
+  const target = ordered.find(({ lecture }) => String(lecture.link || '').trim() && !String(lecture.notes || '').trim());
+  if (!target) return null;
+  return { lectureId: String(target.lecture._id), lectureName: target.lecture.name || 'Lecture ' + (target.index + 1),
+    lectureNumber: target.index + 1, totalLectures: lectures.length };
+}
+
+// Attaches a notes link to an ALREADY-EXISTING lecture (found by id), instead
+// of creating a new lecture entry. Used by auto-save mode in server.js: when a
+// PDF/document is sent right after a video, it gets paired as that lecture's
+// notes rather than becoming its own separate lecture.
+async function autoSetLectureNotes({ batchId, subjectId, chapterId, unitId, lectureId, notes }) {
+  const batchData = db.batch.getOne(batchId);
+  if (!batchData) throw new Error('Batch not found');
+  const subj = (batchData.subjects||[]).find(s => String(s._id) === subjectId);
+  if (!subj) throw new Error('Subject not found');
+  const chap = (subj.chapters||[]).find(c => String(c._id) === chapterId);
+  if (!chap) throw new Error('Chapter not found');
+
+  let lec;
+  if (unitId) {
+    const unit = (chap.units||[]).find(u => String(u._id) === unitId);
+    if (!unit) throw new Error('Unit not found');
+    lec = (unit.lectures||[]).find(l => String(l._id) === lectureId);
+  } else {
+    lec = (chap.lectures||[]).find(l => String(l._id) === lectureId);
+  }
+  if (!lec) throw new Error('Lecture not found (may have been deleted/edited since)');
+  lec.notes = notes;
+
+  db.batch.upsert(batchData);
+
+  const mongoBatch = await Batch.findById(batchId);
+  if (mongoBatch) {
+    const ms = mongoBatch.subjects.id(subjectId);
+    const mc = ms && ms.chapters.id(chapterId);
+    if (mc) {
+      let mlec;
+      if (unitId) { const mu = mc.units.id(unitId); mlec = mu && mu.lectures.id(lectureId); }
+      else { mlec = mc.lectures.id(lectureId); }
+      if (mlec) { mlec.notes = notes; await mongoBatch.save(); }
+    }
+  }
+}
+
+// Removes a lecture entirely by id — used by /undo in server.js when the most
+// recent auto action was "created a new lecture" (as opposed to "attached
+// notes to an existing one", which autoSetLectureNotes with notes:'' handles
+// instead). Returns the removed lecture's name for the confirmation message.
+async function autoDeleteLecture({ batchId, subjectId, chapterId, unitId, lectureId }) {
+  const batchData = db.batch.getOne(batchId);
+  if (!batchData) throw new Error('Batch not found');
+  const subj = (batchData.subjects||[]).find(s => String(s._id) === subjectId);
+  if (!subj) throw new Error('Subject not found');
+  const chap = (subj.chapters||[]).find(c => String(c._id) === chapterId);
+  if (!chap) throw new Error('Chapter not found');
+
+  let removedName = null;
+  if (unitId) {
+    const unit = (chap.units||[]).find(u => String(u._id) === unitId);
+    if (!unit) throw new Error('Unit not found');
+    const idx = (unit.lectures||[]).findIndex(l => String(l._id) === lectureId);
+    if (idx === -1) throw new Error('Lecture not found (may already be removed)');
+    removedName = unit.lectures[idx].name;
+    unit.lectures.splice(idx, 1);
+  } else {
+    const idx = (chap.lectures||[]).findIndex(l => String(l._id) === lectureId);
+    if (idx === -1) throw new Error('Lecture not found (may already be removed)');
+    removedName = chap.lectures[idx].name;
+    chap.lectures.splice(idx, 1);
+  }
+
+  db.batch.upsert(batchData);
+
+  const mongoBatch = await Batch.findById(batchId);
+  if (mongoBatch) {
+    const ms = mongoBatch.subjects.id(subjectId);
+    const mc = ms && ms.chapters.id(chapterId);
+    if (mc) {
+      if (unitId) { const mu = mc.units.id(unitId); if (mu) mu.lectures.pull(lectureId); }
+      else { mc.lectures.pull(lectureId); }
+      await mongoBatch.save();
+    }
+  }
+  return removedName;
+}
+
+// ── Batches ───────────────────────────────────────────────────────────────────
+
+router.get("/batches", async (req, res) => {
+  try {
+    // Everyone reads from SQLite — it's the source of truth for reads (see
+    // the strategy note at the top of sqlite-manager.js), and every batch
+    // write endpoint below calls db.batch.upsert() right alongside its Mongo
+    // write, so SQLite is never stale. Admin used to read fresh from MongoDB
+    // directly here "to be safe", but that just made the admin panel's most
+    // basic screen depend on Mongo being reachable for no real benefit — a
+    // MongoDB hiccup (network blip, Atlas cluster asleep, etc.) broke the
+    // whole batches list for admin while everyone else's SQLite-backed app
+    // kept working fine. Admin gets the FULL unstripped data (no premium
+    // filtering); everyone else gets premium links stripped unless they have access.
+    const admin = isAdminRequest(req);
+    const batches = db.batch.getAll();
+    if (admin) return res.json(batches);
+
+    const userId = getRequestUserId(req);
+    res.json(batches.map(b => {
+      if (!b.isPremium) return b;
+      return hasPremiumAccess(userId, b) ? b : stripPremiumLinks(b);
+    }));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get("/batches/:bid", async (req, res) => {
+  try {
+    // Same reasoning as GET /batches above — read from SQLite always, admin
+    // included. Every write path keeps SQLite in sync via db.batch.upsert(),
+    // so there's no freshness to gain from hitting MongoDB here, only a
+    // needless dependency on it being reachable.
+    const admin = isAdminRequest(req);
+    const b = db.batch.getOne(req.params.bid);
+    if (!b) return res.status(404).json({ error: "Not found" });
+    if (admin) return res.json(b);
+
+    const userId = getRequestUserId(req);
+    const userHasAccess = hasPremiumAccess(userId, b);
+    res.json(b.isPremium && !userHasAccess ? stripPremiumLinks(b) : b);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/batches/migrate-publish", verifyAdmin, async (req, res) => {
+  try {
+    const result = await Batch.updateMany({ isPublic: false }, { $set: { isPublic: true } });
+    // Sync all back to SQLite
+    const batches = await Batch.find({}).lean();
+    for (const b of batches) db.batch.upsert(b);
+    res.json({ success: true, updated: result.modifiedCount });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/batches", verifyAdmin, async (req, res) => {
+  try {
+    const count = db.batch.count();
+    // Write to MongoDB first (gets real _id)
+    const batch = await Batch.create({ name: req.body.name, pic: req.body.pic||"", description: req.body.description||"", order: count, isPublic: false, isPremium: req.body.isPremium===true, premiumUsers: [], price: req.body.price ? Number(req.body.price) : 0, rewardEligible: req.body.rewardEligible !== false, redeemCost24h: (req.body.redeemCost24h !== undefined && req.body.redeemCost24h !== null) ? Number(req.body.redeemCost24h) : null, redeemCost7d: (req.body.redeemCost7d !== undefined && req.body.redeemCost7d !== null) ? Number(req.body.redeemCost7d) : null });
+    db.batch.upsert(batch.toObject());
+    res.json(batch);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.patch("/batches/:bid/publish", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    if (!batch) return res.status(404).json({ error: "Batch not found" });
+    batch.isPublic = !batch.isPublic;
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json({ success: true, isPublic: batch.isPublic });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete("/batches/:bid", verifyAdmin, async (req, res) => {
+  try {
+    await Batch.findByIdAndDelete(req.params.bid);
+    db.batch.delete(req.params.bid);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.patch("/batches/:bid/edit", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    if (!batch) return res.status(404).json({ error: "Batch not found" });
+    if (req.body.name) batch.name = req.body.name;
+    if (req.body.description !== undefined) batch.description = req.body.description;
+    if (req.body.isPremium !== undefined) batch.isPremium = req.body.isPremium;
+    if (req.body.rewardEligible !== undefined) batch.rewardEligible = req.body.rewardEligible !== false;
+    if (req.body.redeemCost24h !== undefined) batch.redeemCost24h = (req.body.redeemCost24h === null || req.body.redeemCost24h === '') ? null : Number(req.body.redeemCost24h);
+    if (req.body.redeemCost7d !== undefined) batch.redeemCost7d = (req.body.redeemCost7d === null || req.body.redeemCost7d === '') ? null : Number(req.body.redeemCost7d);
+    if (req.body.price !== undefined) batch.price = Number(req.body.price)||0;
+    if (req.body.pic !== undefined) batch.pic = req.body.pic;
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json(batch);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Premium Users ─────────────────────────────────────────────────────────────
+
+router.get("/batches/:bid/premium-users", verifyPower('premium'), async (req, res) => {
+  try {
+    const b = db.batch.getOne(req.params.bid);
+    if (!b) return res.status(404).json({ error: "Batch not found" });
+    res.json({ premiumUsers: b.premiumUsers||[] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/batches/:bid/premium-users", verifyPower('premium'), async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    if (!batch) return res.status(404).json({ error: "Batch not found" });
+    const uid = String(req.body.userId||'').trim();
+    if (!uid) return res.status(400).json({ error: "userId required" });
+    if (!batch.premiumUsers) batch.premiumUsers = [];
+    if (!batch.premiumUsers.includes(uid)) { batch.premiumUsers.push(uid); await batch.save(); }
+    db.batch.upsert(batch.toObject());
+    res.json({ success: true, premiumUsers: batch.premiumUsers });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete("/batches/:bid/premium-users/:uid", verifyPower('premium'), async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    if (!batch) return res.status(404).json({ error: "Batch not found" });
+    batch.premiumUsers = (batch.premiumUsers||[]).filter(u => u !== req.params.uid);
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json({ success: true, premiumUsers: batch.premiumUsers });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get("/batches/:bid/premium-check/:userId", async (req, res) => {
+  try {
+    const b = db.batch.getOne(req.params.bid);
+    if (!b) return res.status(404).json({ error: "Batch not found" });
+    const userId = String(req.params.userId);
+    const isPermanent = (b.premiumUsers||[]).includes(userId);
+    const rewardAccess = db.batchRewardAccess.findOne(userId, String(b._id));
+    const rewardActive = !!rewardAccess && rewardAccess.expiresAt > new Date();
+    res.json({
+      hasAccess: isPermanent || rewardActive,
+      isPremium: b.isPremium===true,
+      isPermanent,
+      rewardAccessExpiresAt: rewardActive ? rewardAccess.expiresAt : null,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Subjects ──────────────────────────────────────────────────────────────────
+
+router.post("/batches/:bid/subjects", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    if (!batch) return res.status(404).json({ error: "Batch not found" });
+    batch.subjects.push({ name: req.body.name, icon: req.body.icon||"📚", color: req.body.color||"#4f8ef7", order: batch.subjects.length });
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json(batch);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete("/batches/:bid/subjects/:sid", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    if (!batch) return res.status(404).json({ error: "Batch not found" });
+    batch.subjects = batch.subjects.filter(s => s._id.toString() !== req.params.sid);
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.patch("/batches/:bid/subjects/:sid/edit", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    const subj = batch && batch.subjects.id(req.params.sid);
+    if (!subj) return res.status(404).json({ error: "Not found" });
+    if (req.body.name) subj.name = req.body.name;
+    if (req.body.icon) subj.icon = req.body.icon;
+    if (req.body.color) subj.color = req.body.color;
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json(batch);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Re-arrange a subject's position within the batch — { direction: 'up' | 'down' }
+// Deep-clone any subdocument as plain data, stripping every _id so Mongoose
+// mints brand-new ones for it and everything nested inside it (used by the
+// chapter/subject/lecture "copy to another batch" endpoints below).
+function stripIds(obj) {
+  const clone = JSON.parse(JSON.stringify(obj));
+  const strip = (o) => {
+    if (Array.isArray(o)) { o.forEach(strip); return; }
+    if (o && typeof o === "object") { delete o._id; Object.values(o).forEach(strip); }
+  };
+  strip(clone);
+  return clone;
+}
+
+router.patch("/batches/:bid/subjects/:sid/move", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    if (!batch) return res.status(404).json({ error: "Batch not found" });
+    const idx = batch.subjects.findIndex(s => s._id.toString() === req.params.sid);
+    if (idx === -1) return res.status(404).json({ error: "Not found" });
+    const swapIdx = req.body.direction === "up" ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= batch.subjects.length) return res.status(400).json({ error: "Already at the edge" });
+    const reordered = batch.subjects.map(s => s.toObject());
+    [reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]];
+    reordered.forEach((s, i) => { s.order = i; });
+    batch.subjects = reordered;
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json(batch);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Copy an entire subject (with all its chapters + units + lectures) AS-IS into another batch.
+// Body: { targetBatchId }
+router.post("/batches/:bid/subjects/:sid/copy-to", verifyAdmin, async (req, res) => {
+  try {
+    const { targetBatchId } = req.body;
+    if (!targetBatchId) return res.status(400).json({ error: "targetBatchId required" });
+
+    const srcBatch = await Batch.findById(req.params.bid);
+    const srcSubj = srcBatch && srcBatch.subjects.id(req.params.sid);
+    if (!srcSubj) return res.status(404).json({ error: "Source subject not found" });
+
+    const destBatch = String(targetBatchId) === String(req.params.bid) ? srcBatch : await Batch.findById(targetBatchId);
+    if (!destBatch) return res.status(404).json({ error: "Target batch not found" });
+
+    const clonedSubject = stripIds(srcSubj.toObject());
+    clonedSubject.order = destBatch.subjects.length;
+
+    destBatch.subjects.push(clonedSubject);
+    await destBatch.save();
+    db.batch.upsert(destBatch.toObject());
+    res.json({ success: true, batch: destBatch });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Chapters ──────────────────────────────────────────────────────────────────
+
+router.post("/batches/:bid/subjects/:sid/chapters", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    const subj = batch && batch.subjects.id(req.params.sid);
+    if (!subj) return res.status(404).json({ error: "Not found" });
+    subj.chapters.push({ name: req.body.name, order: subj.chapters.length });
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json(batch);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete("/batches/:bid/subjects/:sid/chapters/:cid", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    const subj = batch && batch.subjects.id(req.params.sid);
+    if (!subj) return res.status(404).json({ error: "Not found" });
+    subj.chapters = subj.chapters.filter(c => c._id.toString() !== req.params.cid);
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.patch("/batches/:bid/subjects/:sid/chapters/:cid/edit", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    const subj = batch && batch.subjects.id(req.params.sid);
+    const chap = subj && subj.chapters.id(req.params.cid);
+    if (!chap) return res.status(404).json({ error: "Not found" });
+    if (req.body.name) chap.name = req.body.name;
+    if (req.body.comingSoon !== undefined) chap.comingSoon = req.body.comingSoon;
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json(batch);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Re-arrange a chapter's position within the subject — { direction: 'up' | 'down' }
+router.patch("/batches/:bid/subjects/:sid/chapters/:cid/move", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    const subj = batch && batch.subjects.id(req.params.sid);
+    if (!subj) return res.status(404).json({ error: "Not found" });
+    const idx = subj.chapters.findIndex(c => c._id.toString() === req.params.cid);
+    if (idx === -1) return res.status(404).json({ error: "Not found" });
+    const swapIdx = req.body.direction === "up" ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= subj.chapters.length) return res.status(400).json({ error: "Already at the edge" });
+    const reordered = subj.chapters.map(c => c.toObject());
+    [reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]];
+    reordered.forEach((c, i) => { c.order = i; });
+    subj.chapters = reordered;
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json(batch);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Copy a chapter (with all its units + lectures) AS-IS into another batch/subject.
+// Body: { targetBatchId, targetSubjectId }
+router.post("/batches/:bid/subjects/:sid/chapters/:cid/copy-to", verifyAdmin, async (req, res) => {
+  try {
+    const { targetBatchId, targetSubjectId } = req.body;
+    if (!targetBatchId || !targetSubjectId) return res.status(400).json({ error: "targetBatchId and targetSubjectId required" });
+
+    const srcBatch = await Batch.findById(req.params.bid);
+    const srcSubj = srcBatch && srcBatch.subjects.id(req.params.sid);
+    const srcChap = srcSubj && srcSubj.chapters.id(req.params.cid);
+    if (!srcChap) return res.status(404).json({ error: "Source chapter not found" });
+
+    const destBatch = String(targetBatchId) === String(req.params.bid) ? srcBatch : await Batch.findById(targetBatchId);
+    if (!destBatch) return res.status(404).json({ error: "Target batch not found" });
+    const destSubj = destBatch.subjects.id(targetSubjectId);
+    if (!destSubj) return res.status(404).json({ error: "Target subject not found" });
+
+    // Deep-clone the chapter as plain data, stripping every _id so Mongoose
+    // mints brand-new ones for the chapter, its units, and every lecture.
+    const clonedChapter = stripIds(srcChap.toObject());
+    clonedChapter.order = destSubj.chapters.length;
+
+    destSubj.chapters.push(clonedChapter);
+    await destBatch.save();
+    db.batch.upsert(destBatch.toObject());
+    res.json({ success: true, batch: destBatch });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Units ─────────────────────────────────────────────────────────────────────
+
+router.post("/batches/:bid/subjects/:sid/chapters/:cid/units", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    const subj = batch && batch.subjects.id(req.params.sid);
+    const chap = subj && subj.chapters.id(req.params.cid);
+    if (!chap) return res.status(404).json({ error: "Not found" });
+    chap.units.push({ name: req.body.name, order: chap.units.length });
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json(batch);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete("/batches/:bid/subjects/:sid/chapters/:cid/units/:uid", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    const subj = batch && batch.subjects.id(req.params.sid);
+    const chap = subj && subj.chapters.id(req.params.cid);
+    if (!chap) return res.status(404).json({ error: "Not found" });
+    chap.units = chap.units.filter(u => u._id.toString() !== req.params.uid);
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.patch("/batches/:bid/subjects/:sid/chapters/:cid/units/:uid/edit", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    const subj = batch && batch.subjects.id(req.params.sid);
+    const chap = subj && subj.chapters.id(req.params.cid);
+    const unit = chap && chap.units.id(req.params.uid);
+    if (!unit) return res.status(404).json({ error: "Not found" });
+    if (req.body.name) unit.name = req.body.name;
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json(batch);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Lectures (chapter-level) ──────────────────────────────────────────────────
+
+router.post("/batches/:bid/subjects/:sid/chapters/:cid/lectures", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    const subj = batch && batch.subjects.id(req.params.sid);
+    const chap = subj && subj.chapters.id(req.params.cid);
+    if (!chap) return res.status(404).json({ error: "Not found" });
+    chap.lectures.push({ name: req.body.name, link: req.body.link, notes: req.body.notes||"", order: chap.lectures.length, isDemo: req.body.isDemo===true });
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json(batch);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete("/batches/:bid/subjects/:sid/chapters/:cid/lectures/:lid", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    const subj = batch && batch.subjects.id(req.params.sid);
+    const chap = subj && subj.chapters.id(req.params.cid);
+    if (!chap) return res.status(404).json({ error: "Not found" });
+    chap.lectures = chap.lectures.filter(l => l._id.toString() !== req.params.lid);
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.patch("/batches/:bid/subjects/:sid/chapters/:cid/lectures/:lid/edit", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    const subj = batch && batch.subjects.id(req.params.sid);
+    const chap = subj && subj.chapters.id(req.params.cid);
+    const lec = chap && chap.lectures.id(req.params.lid);
+    if (!lec) return res.status(404).json({ error: "Not found" });
+    if (req.body.name) lec.name = req.body.name;
+    if (req.body.link !== undefined) lec.link = req.body.link;
+    if (req.body.notes !== undefined) lec.notes = req.body.notes;
+    if (req.body.comingSoon !== undefined) lec.comingSoon = req.body.comingSoon;
+    if (req.body.isDemo !== undefined) lec.isDemo = req.body.isDemo;
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json(batch);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Copy a single chapter-level lecture AS-IS into another batch/subject/chapter (or unit).
+// Body: { targetBatchId, targetSubjectId, targetChapterId, targetUnitId? }
+router.post("/batches/:bid/subjects/:sid/chapters/:cid/lectures/:lid/copy-to", verifyAdmin, async (req, res) => {
+  try {
+    const { targetBatchId, targetSubjectId, targetChapterId, targetUnitId } = req.body;
+    if (!targetBatchId || !targetSubjectId || !targetChapterId) return res.status(400).json({ error: "targetBatchId, targetSubjectId and targetChapterId required" });
+
+    const srcBatch = await Batch.findById(req.params.bid);
+    const srcSubj = srcBatch && srcBatch.subjects.id(req.params.sid);
+    const srcChap = srcSubj && srcSubj.chapters.id(req.params.cid);
+    const srcLec = srcChap && srcChap.lectures.id(req.params.lid);
+    if (!srcLec) return res.status(404).json({ error: "Source lecture not found" });
+
+    const destBatch = String(targetBatchId) === String(req.params.bid) ? srcBatch : await Batch.findById(targetBatchId);
+    if (!destBatch) return res.status(404).json({ error: "Target batch not found" });
+    const destSubj = destBatch.subjects.id(targetSubjectId);
+    const destChap = destSubj && destSubj.chapters.id(targetChapterId);
+    if (!destChap) return res.status(404).json({ error: "Target chapter not found" });
+    const destList = targetUnitId ? (destChap.units.id(targetUnitId) || {}).lectures : destChap.lectures;
+    if (!destList) return res.status(404).json({ error: "Target unit not found" });
+
+    const clonedLecture = stripIds(srcLec.toObject());
+    clonedLecture.order = destList.length;
+    destList.push(clonedLecture);
+
+    await destBatch.save();
+    db.batch.upsert(destBatch.toObject());
+    res.json({ success: true, batch: destBatch });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Lectures (unit-level) ─────────────────────────────────────────────────────
+
+router.post("/batches/:bid/subjects/:sid/chapters/:cid/units/:uid/lectures", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    const subj = batch && batch.subjects.id(req.params.sid);
+    const chap = subj && subj.chapters.id(req.params.cid);
+    const unit = chap && chap.units.id(req.params.uid);
+    if (!unit) return res.status(404).json({ error: "Not found" });
+    unit.lectures.push({ name: req.body.name, link: req.body.link, notes: req.body.notes||"", order: unit.lectures.length, isDemo: req.body.isDemo===true });
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json(batch);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete("/batches/:bid/subjects/:sid/chapters/:cid/units/:uid/lectures/:lid", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    const subj = batch && batch.subjects.id(req.params.sid);
+    const chap = subj && subj.chapters.id(req.params.cid);
+    const unit = chap && chap.units.id(req.params.uid);
+    if (!unit) return res.status(404).json({ error: "Not found" });
+    unit.lectures = unit.lectures.filter(l => l._id.toString() !== req.params.lid);
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.patch("/batches/:bid/subjects/:sid/chapters/:cid/units/:uid/lectures/:lid/edit", verifyAdmin, async (req, res) => {
+  try {
+    const batch = await Batch.findById(req.params.bid);
+    const subj = batch && batch.subjects.id(req.params.sid);
+    const chap = subj && subj.chapters.id(req.params.cid);
+    const unit = chap && chap.units.id(req.params.uid);
+    const lec = unit && unit.lectures.id(req.params.lid);
+    if (!lec) return res.status(404).json({ error: "Not found" });
+    if (req.body.name) lec.name = req.body.name;
+    if (req.body.link !== undefined) lec.link = req.body.link;
+    if (req.body.notes !== undefined) lec.notes = req.body.notes;
+    if (req.body.comingSoon !== undefined) lec.comingSoon = req.body.comingSoon;
+    if (req.body.isDemo !== undefined) lec.isDemo = req.body.isDemo;
+    await batch.save();
+    db.batch.upsert(batch.toObject());
+    res.json(batch);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Copy a single unit-level lecture AS-IS into another batch/subject/chapter (or unit).
+// Body: { targetBatchId, targetSubjectId, targetChapterId, targetUnitId? }
+router.post("/batches/:bid/subjects/:sid/chapters/:cid/units/:uid/lectures/:lid/copy-to", verifyAdmin, async (req, res) => {
+  try {
+    const { targetBatchId, targetSubjectId, targetChapterId, targetUnitId } = req.body;
+    if (!targetBatchId || !targetSubjectId || !targetChapterId) return res.status(400).json({ error: "targetBatchId, targetSubjectId and targetChapterId required" });
+
+    const srcBatch = await Batch.findById(req.params.bid);
+    const srcSubj = srcBatch && srcBatch.subjects.id(req.params.sid);
+    const srcChap = srcSubj && srcSubj.chapters.id(req.params.cid);
+    const srcUnit = srcChap && srcChap.units.id(req.params.uid);
+    const srcLec = srcUnit && srcUnit.lectures.id(req.params.lid);
+    if (!srcLec) return res.status(404).json({ error: "Source lecture not found" });
+
+    const destBatch = String(targetBatchId) === String(req.params.bid) ? srcBatch : await Batch.findById(targetBatchId);
+    if (!destBatch) return res.status(404).json({ error: "Target batch not found" });
+    const destSubj = destBatch.subjects.id(targetSubjectId);
+    const destChap = destSubj && destSubj.chapters.id(targetChapterId);
+    if (!destChap) return res.status(404).json({ error: "Target chapter not found" });
+    const destList = targetUnitId ? (destChap.units.id(targetUnitId) || {}).lectures : destChap.lectures;
+    if (!destList) return res.status(404).json({ error: "Target unit not found" });
+
+    const clonedLecture = stripIds(srcLec.toObject());
+    clonedLecture.order = destList.length;
+    destList.push(clonedLecture);
+
+    await destBatch.save();
+    db.batch.upsert(destBatch.toObject());
+    res.json({ success: true, batch: destBatch });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Announcements ─────────────────────────────────────────────────────────────
+
+const announcementSchema = new mongoose.Schema({ emoji: { type: String, default: "📢" }, heading: { type: String, required: true }, body: { type: String, required: true }, createdAt: { type: Date, default: Date.now } });
+const Announcement = mongoose.model("Announcement", announcementSchema);
+
+router.get("/announcements", (req, res) => {
+  try { res.json(db.announcement.getAll()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/announcements", verifyPower('announcements'), async (req, res) => {
+  try {
+    const { emoji, heading, body } = req.body;
+    if (!heading || !body) return res.status(400).json({ error: "heading and body required" });
+    // Write to MongoDB to get _id
+    const ann = await Announcement.create({ emoji: emoji||"📢", heading, body });
+    db.announcement.insert({ id: String(ann._id), emoji: ann.emoji, heading: ann.heading, body: ann.body, createdAt: ann.createdAt });
+    res.json({ ...ann.toObject(), _id: String(ann._id) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete("/announcements/:id", verifyPower('announcements'), async (req, res) => {
+  try {
+    await Announcement.findByIdAndDelete(req.params.id);
+    db.announcement.delete(req.params.id);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Ad Token + Access ─────────────────────────────────────────────────────────
+
+const adTokenSchema = new mongoose.Schema({ userId: { type: String, required: true }, token: { type: String, required: true, unique: true }, issuedAt: { type: Date, default: Date.now }, expiresAt: { type: Date, required: true } });
+adTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+const AdToken = mongoose.model("AdToken", adTokenSchema);
+
+const accessSchema = new mongoose.Schema({ userId: { type: String, required: true, unique: true }, expiresAt: { type: Date, required: true }, claimsToday: { type: Number, default: 0 }, claimDay: { type: String, default: '' } });
+const Access = mongoose.model("Access", accessSchema);
+
+router.get("/access/:userId", (req, res) => {
+  try {
+    const record = db.access.findOne(req.params.userId);
+    const today = new Date().toISOString().slice(0, 10);
+    const claimsToday = (record && record.claimDay === today) ? (record.claimsToday||0) : 0;
+    const claimsLeft = Math.max(0, 3 - claimsToday);
+    if (!record || record.expiresAt < new Date()) return res.json({ hasAccess: false, expiresAt: null, claimsToday, claimsLeft });
+    res.json({ hasAccess: true, expiresAt: record.expiresAt, claimsToday, claimsLeft });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/access/token/:userId", async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const today = new Date().toISOString().slice(0, 10);
+    const existing = db.access.findOne(userId);
+    const claimsToday = (existing && existing.claimDay === today) ? (existing.claimsToday||0) : 0;
+    if (claimsToday >= 3) return res.status(429).json({ error: "Aaj ke 3 claims ho gaye! Kal wapas aao.", claimsToday: 3, claimsLeft: 0 });
+
+    db.adToken.deleteByUser(userId);
+    await AdToken.deleteMany({ userId });
+
+    const token = crypto.randomBytes(32).toString("hex");
+    const tokenExpiry = new Date(Date.now() + 10 * 60 * 1000);
+    const id = db.generateId();
+    db.adToken.create({ id, userId, token, issuedAt: new Date(), expiresAt: tokenExpiry });
+    // MongoDB backup
+    AdToken.create({ userId, token, expiresAt: tokenExpiry }).catch(() => {});
+    res.json({ token, claimsToday, claimsLeft: 3 - claimsToday });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/access/claim/:userId", async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: "Token required" });
+
+    const record = db.adToken.findOne({ userId, token });
+    if (!record) return res.status(403).json({ error: "Invalid or expired token. Please watch the ad again." });
+    if (record.expiresAt < new Date()) return res.status(403).json({ error: "Token expired. Please watch the ad again." });
+    const elapsed = (Date.now() - new Date(record.issuedAt)) / 1000;
+    if (elapsed < 10) return res.status(403).json({ error: "You skipped the ad too soon! Please watch it fully (at least 10 seconds) to unlock your reward." });
+
+    const today = new Date().toISOString().slice(0, 10);
+    const existing = db.access.findOne(userId);
+    const claimsToday = (existing && existing.claimDay === today) ? (existing.claimsToday||0) : 0;
+    if (claimsToday >= 3) { db.adToken.deleteById(record.id); return res.status(429).json({ error: "Aaj ke 3 claims ho gaye! Kal wapas aao." }); }
+
+    db.adToken.deleteById(record.id);
+    AdToken.deleteOne({ userId, token }).catch(() => {});
+
+    const baseTime = (existing && existing.expiresAt > new Date()) ? existing.expiresAt : new Date();
+    const expiresAt = new Date(baseTime.getTime() + 8 * 60 * 60 * 1000);
+    const newClaimsToday = claimsToday + 1;
+
+    db.access.upsert({ userId, expiresAt, claimsToday: newClaimsToday, claimDay: today });
+    // MongoDB backup
+    Access.findOneAndUpdate({ userId }, { userId, expiresAt, claimsToday: newClaimsToday, claimDay: today }, { upsert: true }).catch(() => {});
+    res.json({ hasAccess: true, expiresAt, claimsToday: newClaimsToday, claimsLeft: 3 - newClaimsToday });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Referrals ─────────────────────────────────────────────────────────────────
+
+const referralSchema = new mongoose.Schema({ referrerId: { type: String, required: true }, referredId: { type: String, required: true }, createdAt: { type: Date, default: Date.now } });
+referralSchema.index({ referrerId: 1 });
+referralSchema.index({ referredId: 1 }, { unique: true });
+const Referral = mongoose.model('Referral', referralSchema);
+
+router.get('/refer/stats/:userId', (req, res) => {
+  try {
+    const { referrals, spent, points } = getPointsBreakdown(req.params.userId);
+    res.json({ referrals, spent, points });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/refer/record', async (req, res) => {
+  try {
+    const { referrerId, referredId } = req.body;
+    if (!referrerId || !referredId) return res.status(400).json({ error: 'Missing fields' });
+    if (referrerId === referredId) return res.status(400).json({ error: 'Cannot refer yourself' });
+    if (!req.body.isNewUser) return res.json({ success: false, isNew: false, reason: 'Not a new user' });
+
+    const existing = db.referral.findByReferred(referredId);
+    if (existing) return res.json({ success: false, isNew: false, reason: 'Already referred' });
+
+    const id = db.generateId();
+    db.referral.insert({ id, referrerId, referredId });
+    // MongoDB backup
+    Referral.create({ referrerId, referredId }).catch(() => {});
+
+    if (LOGS_GROUP_ID && _bot) {
+      const text = `🎉 <b>New Referral</b>\n\n` +
+        `👤 Referrer: ${esc(formatUserLabel(referrerId))} (<code>${referrerId}</code>)\n` +
+        `➕ Referred: ${esc(formatUserLabel(referredId))} (<code>${referredId}</code>)\n` +
+        `🕐 ${formatIST(new Date())}`;
+      _bot.sendMessage(LOGS_GROUP_ID, text, { parse_mode: "HTML" }).catch(() => {});
+    }
+
+    res.json({ success: true, isNew: true });
+  } catch (e) {
+    if (e.code === 11000) return res.json({ success: false, reason: 'Already referred' });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Rewards (spend referral points on real perks) ──────────────────────────────
+// Points are never stored as a mutable balance — they are always DERIVED as
+// (referrals earned) - (points spent, from reward_redemptions). This means the
+// number shown to the user can never drift out of sync with their real referral
+// count, no matter what happens to the reward system itself.
+
+const rewardRedemptionSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  rewardType: { type: String, required: true },   // 'accessPass' | 'batch24h' | 'batch7d'
+  batchId: { type: String, default: null },
+  batchName: { type: String, default: '' },
+  pointsCost: { type: Number, required: true },
+  redeemedAt: { type: Date, default: Date.now },
+  expiresAt: { type: Date, required: true },
+});
+rewardRedemptionSchema.index({ userId: 1 });
+const RewardRedemption = mongoose.models.RewardRedemption || mongoose.model('RewardRedemption', rewardRedemptionSchema);
+
+const batchRewardAccessSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  batchId: { type: String, required: true },
+  batchName: { type: String, default: '' },
+  expiresAt: { type: Date, required: true },
+  grantedAt: { type: Date, default: Date.now },
+});
+batchRewardAccessSchema.index({ userId: 1, batchId: 1 }, { unique: true });
+const BatchRewardAccess = mongoose.models.BatchRewardAccess || mongoose.model('BatchRewardAccess', batchRewardAccessSchema);
+
+// Manual point grants/deductions made by the admin via /addpoints. Kept as its own
+// signed ledger (points can be negative) rather than a balance column, same reasoning
+// as referrals/redemptions — see getPointsBreakdown below, which is the only place
+// this actually gets folded into a user's spendable total.
+const pointAdjustmentSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  points: { type: Number, required: true },
+  note: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now },
+});
+pointAdjustmentSchema.index({ userId: 1 });
+const PointAdjustment = mongoose.models.PointAdjustment || mongoose.model('PointAdjustment', pointAdjustmentSchema);
+
+// Manual per-user daily spin-limit adjustments (admin /addspins command).
+// Net sum for a user is added on top of the global daily spin limit — see getSpinStatus.
+const spinAdjustmentSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  delta: { type: Number, required: true },
+  note: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now },
+});
+spinAdjustmentSchema.index({ userId: 1 });
+const SpinAdjustment = mongoose.models.SpinAdjustment || mongoose.model('SpinAdjustment', spinAdjustmentSchema);
+
+// Reward catalog — single source of truth for cost + duration of every reward.
+// To add a new reward in future, just add an entry here (and a matching branch
+// in the redeem handler below if it needs special grant logic).
+// Each successful referral is worth this many points (single source of truth —
+// change this one number to adjust the referral reward economy).
+const POINTS_PER_REFERRAL = 5;
+
+// Spin & Earn tab configuration
+// Daily spin limit is admin-configurable (via /setspinlimit in server.js) —
+// stored in bot_settings so it persists across restarts, defaulting to 5 if
+// never set. Read fresh each time rather than cached, since it can change at
+// any moment from a bot command while the server keeps running.
+function getSpinDailyLimit() {
+  return db.settings.get('spin_daily_limit', 5);
+}
+const SPIN_COOLDOWN_MS = 10 * 1000;
+const SPIN_AD_WATCH_SECONDS = 10;
+
+const REWARD_CATALOG = {
+  accessPass: { cost: 5, durationMs: 24 * 60 * 60 * 1000, label: '24 Hour Site Access' },
+  batch24h: { cost: 10, durationMs: 24 * 60 * 60 * 1000, label: '24 Hour Premium Batch Access' },
+  batch7d: { cost: 50, durationMs: 7 * 24 * 60 * 60 * 1000, label: '7 Day Premium Batch Access' },
+};
+
+// Every REFERRALS_PER_ADSFREE_WEEK referrals (raw count, NOT points — separate
+// currency, separate redeem button) earns one redeemable "1 week Ads-Free".
+// Stacks with any existing Ads-Free time (purchased or previously redeemed
+// this way), same as a real purchase. See /rewards/redeem-referral-adsfree.
+const REFERRALS_PER_ADSFREE_WEEK = 5;
+const REFERRAL_ADSFREE_DAYS = 7;
+
+// Single source of truth for the points formula — always fresh from the DB,
+// never trusts a client-sent value. referrals here is the raw referral COUNT;
+// points is the spendable balance (referrals*POINTS_PER_REFERRAL + spinEarned + adjustment - spent).
+function getPointsBreakdown(userId) {
+  const referrals = db.referral.countByReferrer(userId);
+  const spinEarned = db.spinHistory.totalEarned(userId);
+  const adjustment = db.pointAdjustment.totalForUser(userId); // manual admin grants/deductions, can be negative
+  const spent = db.rewardRedemption.totalSpent(userId);
+  const points = Math.max(0, referrals * POINTS_PER_REFERRAL + spinEarned + adjustment - spent);
+  return { referrals, spinEarned, adjustment, spent, points };
+}
+function getSpendablePoints(userId) {
+  return getPointsBreakdown(userId).points;
+}
+
+// Notify the bot owner whenever someone redeems a reward — fire-and-forget,
+// never allowed to block or fail the actual redeem response to the user.
+function notifyOwnerOfRedemption({ userId, rewardType, catalogEntry, batchDoc, pointsCost, pointsRemaining, expiresAt }) {
+  if (!BOT_TOKEN || !OWNER_ID) return;
+  try {
+    const u = db.user.findOne(userId);
+    const displayName = u ? [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || 'Unknown' : 'Unknown';
+    const usernameStr = u && u.username ? ` (@${u.username})` : '';
+    const expiryStr = new Date(expiresAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+
+    let text = `🎁 <b>Reward Redeemed!</b>\n\n` +
+      `👤 <b>User:</b> ${displayName}${usernameStr}\n` +
+      `🆔 <b>ID:</b> <code>${userId}</code>\n` +
+      `🎯 <b>Reward:</b> ${catalogEntry.label}\n` +
+      `⭐ <b>Points Spent:</b> ${pointsCost} (Balance left: ${pointsRemaining})\n`;
+    if (batchDoc) text += `🎓 <b>Batch:</b> ${batchDoc.name}\n`;
+    text += `⏳ <b>Access Until:</b> ${expiryStr}`;
+
+    fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: OWNER_ID, text, parse_mode: 'HTML' }),
+    }).catch(() => {});
+  } catch (e) { /* never let a notification failure affect the redeem flow */ }
+}
+
+// GET summary — powers the Rewards page header (points balance + active perks)
+router.get('/rewards/summary/:userId', (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const { referrals, spent, points } = getPointsBreakdown(userId);
+
+    const accessRecord = db.access.findOne(userId);
+    const accessPass = {
+      active: !!accessRecord && accessRecord.expiresAt > new Date(),
+      expiresAt: accessRecord ? accessRecord.expiresAt : null,
+    };
+
+    const activeBatchRewards = db.batchRewardAccess.listActiveByUser(userId)
+      .map(r => ({ batchId: r.batchId, batchName: r.batchName, expiresAt: r.expiresAt }));
+
+    // Referral-based Ads-Free reward — separate "currency" from points above,
+    // eligibility is purely floor(referrals / 5) minus however many they've
+    // already redeemed this way (never re-derived from points/spent).
+    const referralAdsFreeRedeemed = db.rewardRedemption.countByTypeForUser(userId, 'referralAdsFree');
+    const referralAdsFree = {
+      referralsPerReward: REFERRALS_PER_ADSFREE_WEEK,
+      rewardDays: REFERRAL_ADSFREE_DAYS,
+      progress: referrals % REFERRALS_PER_ADSFREE_WEEK,
+      available: Math.max(0, Math.floor(referrals / REFERRALS_PER_ADSFREE_WEEK) - referralAdsFreeRedeemed),
+    };
+
+    res.json({ referrals, spent, points, accessPass, activeBatchRewards, referralAdsFree, catalog: REWARD_CATALOG });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST — redeem one "5 referrals -> 1 week Ads-Free" reward. Pure referral-
+// count based, costs zero points (separate from REWARD_CATALOG/points above).
+router.post('/rewards/redeem-referral-adsfree', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    if (!_grantAdsFreeAccess) return res.status(500).json({ error: 'Ads-Free grant is not wired up yet — restart the server.' });
+
+    // ── Critical section: no `await` between the eligibility check and the
+    // ledger insert, so two rapid clicks can't both pass the check and double-
+    // redeem the same batch of 5 referrals. Same pattern as /rewards/redeem.
+    const referrals = db.referral.countByReferrer(userId);
+    const alreadyRedeemed = db.rewardRedemption.countByTypeForUser(userId, 'referralAdsFree');
+    const available = Math.floor(referrals / REFERRALS_PER_ADSFREE_WEEK) - alreadyRedeemed;
+    if (available < 1) {
+      const needed = REFERRALS_PER_ADSFREE_WEEK - (referrals % REFERRALS_PER_ADSFREE_WEEK || REFERRALS_PER_ADSFREE_WEEK);
+      return res.status(400).json({
+        error: `Abhi eligible nahi ho. Har ${REFERRALS_PER_ADSFREE_WEEK} referrals pe 1 week Ads-Free milta hai — ${needed} aur referral chahiye.`,
+        referrals, available: 0,
+      });
+    }
+
+    const redeemedAt = new Date();
+    const id = db.generateId();
+    db.rewardRedemption.insert({
+      id, userId, rewardType: 'referralAdsFree', batchId: null, batchName: '',
+      pointsCost: 0, redeemedAt, expiresAt: redeemedAt, // placeholder; real expiry is the Ads-Free subscription's own, set below
+    });
+    // ── End critical section ─────────────────────────────────────────────
+
+    const expiresAt = await _grantAdsFreeAccess(userId, REFERRAL_ADSFREE_DAYS);
+    if (_notifyFreeAdsFreeGrant) {
+      _notifyFreeAdsFreeGrant({
+        userId,
+        days: REFERRAL_ADSFREE_DAYS,
+        expiresAt,
+        source: `Referral Reward (${REFERRALS_PER_ADSFREE_WEEK} referrals)`,
+      });
+    }
+
+    RewardRedemption.create({
+      userId, rewardType: 'referralAdsFree', batchId: null, batchName: '',
+      pointsCost: 0, redeemedAt, expiresAt: redeemedAt,
+    }).catch(() => {});
+    notifyOwnerOfRedemption({
+      userId, rewardType: 'referralAdsFree',
+      catalogEntry: { label: `${REFERRAL_ADSFREE_DAYS} Day Ads-Free (referral reward)` },
+      batchDoc: null, pointsCost: 0, pointsRemaining: getSpendablePoints(userId), expiresAt,
+    });
+
+    res.json({ success: true, redemptionId: id, rewardType: 'referralAdsFree', daysGranted: REFERRAL_ADSFREE_DAYS, adsFreeExpiresAt: expiresAt, referrals });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET eligible batches — the picker list shown when redeeming a batch-based reward.
+// Excludes batches the user already permanently owns (no point wasting points on those).
+router.get('/rewards/eligible-batches/:userId', (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const all = db.batch.getAll();
+    const eligible = all
+      .filter(b => b.isPremium === true && b.isPublic === true)
+      .filter(b => b.rewardEligible !== false) // admin has excluded this batch from the points-redeem picker
+      .filter(b => !((b.premiumUsers || []).includes(userId))) // already owned permanently — skip
+      .map(b => {
+        const active = db.batchRewardAccess.findOne(userId, String(b._id));
+        return {
+          _id: b._id,
+          name: b.name,
+          pic: b.pic || '',
+          price: b.price || 0,
+          subjectCount: (b.subjects || []).length,
+          redeemCost24h: (b.redeemCost24h !== undefined && b.redeemCost24h !== null) ? b.redeemCost24h : null,
+          redeemCost7d: (b.redeemCost7d !== undefined && b.redeemCost7d !== null) ? b.redeemCost7d : null,
+          activeRewardExpiresAt: (active && active.expiresAt > new Date()) ? active.expiresAt : null,
+        };
+      });
+    res.json({ batches: eligible });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST redeem — the actual "spend points" action
+router.post('/rewards/redeem', async (req, res) => {
+  try {
+    const { userId, rewardType, batchId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    const catalogEntry = REWARD_CATALOG[rewardType];
+    if (!catalogEntry) return res.status(400).json({ error: 'Invalid reward type' });
+
+    let batchDoc = null;
+    if (rewardType === 'batch24h' || rewardType === 'batch7d') {
+      if (!batchId) return res.status(400).json({ error: 'Please select a batch' });
+      batchDoc = db.batch.getOne(batchId);
+      if (!batchDoc || batchDoc.isPublic !== true) return res.status(404).json({ error: 'Batch not found' });
+      if (batchDoc.isPremium !== true) return res.status(400).json({ error: 'This batch is not a premium batch' });
+      if (batchDoc.rewardEligible === false) return res.status(400).json({ error: 'Yeh batch points se redeem nahi ho sakta.' });
+      if ((batchDoc.premiumUsers || []).includes(userId)) {
+        return res.status(400).json({ error: 'Aapke paas already is batch ka full access hai!' });
+      }
+    }
+
+    // Effective cost: a batch's own redeemCost24h/redeemCost7d override, when set,
+    // takes priority over the site-wide REWARD_CATALOG default for that tier.
+    let cost = catalogEntry.cost;
+    if (batchDoc) {
+      const override = rewardType === 'batch7d' ? batchDoc.redeemCost7d : batchDoc.redeemCost24h;
+      if (override !== undefined && override !== null) cost = override;
+    }
+
+    // ── Critical section: everything below is synchronous SQLite work with no
+    // `await` in between, so Node's single-threaded event loop guarantees no
+    // other request can interleave here — this is what prevents double-spending
+    // points from two rapid clicks / concurrent requests. ──────────────────────
+    const spendable = getSpendablePoints(userId);
+    if (spendable < cost) {
+      return res.status(400).json({ error: `Not enough points! Need ${cost}, you have ${spendable}.`, required: cost, available: spendable });
+    }
+
+    let expiresAt;
+    const redeemedAt = new Date();
+    const runGrant = db.getDb().transaction(() => {
+      if (rewardType === 'accessPass') {
+        const existing = db.access.findOne(userId);
+        const baseTime = (existing && existing.expiresAt > redeemedAt) ? existing.expiresAt : redeemedAt;
+        expiresAt = new Date(baseTime.getTime() + catalogEntry.durationMs);
+        // Preserve existing ad-claim counters untouched — this reward is independent of the daily ad-claim cap
+        db.access.upsert({
+          userId, expiresAt,
+          claimsToday: existing ? existing.claimsToday : 0,
+          claimDay: existing ? existing.claimDay : '',
+        });
+      } else {
+        const existing = db.batchRewardAccess.findOne(userId, String(batchId));
+        const baseTime = (existing && existing.expiresAt > redeemedAt) ? existing.expiresAt : redeemedAt;
+        expiresAt = new Date(baseTime.getTime() + catalogEntry.durationMs);
+        db.batchRewardAccess.upsert({ userId, batchId: String(batchId), batchName: batchDoc.name, expiresAt, grantedAt: redeemedAt });
+      }
+
+      // Ledger entry — inserting this row IS the "spend"; balance is always derived, never stored directly
+      const id = db.generateId();
+      db.rewardRedemption.insert({
+        id, userId, rewardType,
+        batchId: batchDoc ? String(batchId) : null,
+        batchName: batchDoc ? batchDoc.name : '',
+        pointsCost: cost, redeemedAt, expiresAt,
+      });
+      return id;
+    });
+    const redemptionId = runGrant();
+    // ── End critical section ───────────────────────────────────────────────────
+
+    // MongoDB backup — fire and forget, matches existing codebase convention
+    RewardRedemption.create({
+      userId, rewardType, batchId: batchDoc ? String(batchId) : null,
+      batchName: batchDoc ? batchDoc.name : '', pointsCost: cost, redeemedAt, expiresAt,
+    }).catch(() => {});
+    if (rewardType === 'accessPass') {
+      const rec = db.access.findOne(userId);
+      Access.findOneAndUpdate({ userId }, { userId, expiresAt: rec.expiresAt, claimsToday: rec.claimsToday, claimDay: rec.claimDay }, { upsert: true }).catch(() => {});
+    } else {
+      BatchRewardAccess.findOneAndUpdate({ userId, batchId: String(batchId) }, { userId, batchId: String(batchId), batchName: batchDoc.name, expiresAt, grantedAt: redeemedAt }, { upsert: true }).catch(() => {});
+    }
+    notifyOwnerOfRedemption({
+      userId, rewardType, catalogEntry, batchDoc,
+      pointsCost: cost, pointsRemaining: spendable - cost, expiresAt,
+    });
+
+    res.json({
+      success: true,
+      redemptionId,
+      rewardType,
+      label: catalogEntry.label,
+      pointsSpent: cost,
+      pointsRemaining: spendable - cost,
+      expiresAt,
+      batchId: batchDoc ? String(batchId) : null,
+      batchName: batchDoc ? batchDoc.name : null,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET redemption history — powers a "My Redeemed Rewards" list in the UI
+router.get('/rewards/history/:userId', (req, res) => {
+  try {
+    const limit = Math.min(50, parseInt(req.query.limit) || 20);
+    const history = db.rewardRedemption.history(req.params.userId, limit);
+    res.json({ history });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Spin & Earn ───────────────────────────────────────────────────────────────
+// A daily spin-the-wheel mini-game. Every spin MUST be preceded by watching a
+// full rewarded ad — enforced with the exact same token-issue-then-verify
+// pattern already used by the Access tab's ad flow (see /access/token and
+// /access/claim above), just on its own separate table so the two ad flows
+// can never interfere with each other. The wheel result (1-5 points) is always
+// generated server-side — the client only ever animates to whatever result
+// the server already committed to the database.
+
+const spinHistorySchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  pointsWon: { type: Number, required: true },
+  spunAt: { type: Date, default: Date.now },
+});
+spinHistorySchema.index({ userId: 1 });
+const SpinHistory = mongoose.models.SpinHistory || mongoose.model('SpinHistory', spinHistorySchema);
+
+function _todayMidnightMs() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+// Single source of truth for "can this user spin right now" — used by all 3 endpoints below
+function getSpinStatus(userId) {
+  const spinsToday = db.spinHistory.countSince(userId, _todayMidnightMs());
+  // Admin-adjustable on top of the global default (see /addspins in server.js) —
+  // e.g. a user with +3 gets 8 spins/day, one with -2 gets 3/day, floor 0.
+  const netAdjustment = db.spinAdjustment.netForUser(userId);
+  const maxSpins = Math.max(0, getSpinDailyLimit() + netAdjustment);
+  const spinsLeft = Math.max(0, maxSpins - spinsToday);
+  const last = db.spinHistory.lastSpinAt(userId);
+  const cooldownRemainingMs = last ? Math.max(0, SPIN_COOLDOWN_MS - (Date.now() - last.getTime())) : 0;
+  const nextResetAt = new Date(_todayMidnightMs() + 24 * 60 * 60 * 1000);
+  return {
+    spinsToday, spinsLeft, maxSpins,
+    cooldownRemainingMs, canSpin: spinsLeft > 0 && cooldownRemainingMs <= 0,
+    nextResetAt,
+  };
+}
+
+// GET status — powers the Earn tab's UI (spins left, cooldown countdown, spin button enabled/disabled)
+router.get('/spin/status/:userId', (req, res) => {
+  try { res.json(getSpinStatus(req.params.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST token — issued right before the ad plays; must be redeemed via /spin/claim afterwards
+router.post('/spin/token/:userId', (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const status = getSpinStatus(userId);
+    if (!status.canSpin) {
+      if (status.spinsLeft <= 0) return res.status(429).json({ error: `Aaj ke saare ${status.maxSpins} spins ho gaye! Kal wapas aao.`, ...status });
+      return res.status(429).json({ error: `Thoda ruko! Agla spin ${Math.ceil(status.cooldownRemainingMs / 1000)}s mein.`, ...status });
+    }
+
+    db.spinToken.deleteByUser(userId); // one live spin-token per user at a time, same as adToken
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const issuedAt = new Date();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    db.spinToken.create({ id: db.generateId(), userId, token, issuedAt, expiresAt });
+
+    res.json({ token });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST claim — verifies the ad was actually watched (min elapsed time, same as access/claim),
+// re-checks the daily limit + cooldown fresh (defends against races/stale client state),
+// then rolls the wheel server-side and records the spin.
+router.post('/spin/claim/:userId', (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'Token required' });
+
+    const record = db.spinToken.findOne({ userId, token });
+    if (!record) return res.status(403).json({ error: 'Invalid or expired spin. Please try again.' });
+    if (record.expiresAt < new Date()) { db.spinToken.deleteById(record.id); return res.status(403).json({ error: 'Spin expired. Please try again.' }); }
+    const elapsed = (Date.now() - record.issuedAt.getTime()) / 1000;
+    if (elapsed < SPIN_AD_WATCH_SECONDS) return res.status(403).json({ error: 'You skipped the ad too soon! Please watch it fully (at least 10 seconds) to get your spin.' });
+
+    // ── Critical section: everything below is synchronous, no await in between,
+    // so no concurrent request can double-spend this spin (same reasoning as
+    // the reward-redeem endpoint's critical section). ─────────────────────────
+    const status = getSpinStatus(userId);
+    if (!status.canSpin) {
+      db.spinToken.deleteById(record.id);
+      if (status.spinsLeft <= 0) return res.status(429).json({ error: `Aaj ke saare ${status.maxSpins} spins ho gaye! Kal wapas aao.`, ...status });
+      return res.status(429).json({ error: `Thoda ruko! Agla spin ${Math.ceil(status.cooldownRemainingMs / 1000)}s mein.`, ...status });
+    }
+
+    db.spinToken.deleteById(record.id);
+
+    const pointsWon = 1 + Math.floor(Math.random() * 5); // uniform 1-5, decided server-side only
+    const spunAt = new Date();
+    db.spinHistory.insert({ id: db.generateId(), userId, pointsWon, spunAt });
+    // ── End critical section ───────────────────────────────────────────────────
+
+    SpinHistory.create({ userId, pointsWon, spunAt }).catch(() => {}); // Mongo backup, fire-and-forget
+
+    const newStatus = getSpinStatus(userId);
+    res.json({ pointsWon, ...newStatus });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Watched Lectures ────────────────────────────────────────────────────────────
+// Server-side "have I seen this" marker, keyed by the stable Telegram userId.
+// Deliberately NOT browser localStorage — this app is often served from a
+// rotating tunnel URL (a new origin on every redeploy), which would silently
+// wipe any localStorage-based state. A DB row keyed by userId survives that,
+// device switches, and cache clears.
+
+const watchedLectureSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  lectureId: { type: String, required: true },
+  watchedAt: { type: Date, default: Date.now },
+});
+watchedLectureSchema.index({ userId: 1, lectureId: 1 }, { unique: true });
+const WatchedLecture = mongoose.models.WatchedLecture || mongoose.model('WatchedLecture', watchedLectureSchema);
+
+// ── Giveaway invite confirmation ────────────────────────────────────────────
+// Giveaway/GiveawayParticipant are registered earlier in server.js (before this
+// file is require()'d), so mongoose.model(name) below just retrieves them —
+// no schema is redefined here, keeping a single source of truth.
+const giveawayInviteSchema = new mongoose.Schema({
+  giveawayId: { type: mongoose.Schema.Types.ObjectId, required: true },
+  inviterId: { type: Number, required: true },
+  inviteeId: { type: Number, required: true },
+  status: { type: String, enum: ["pending","confirmed","reversed"], default: "pending" },
+  confirmedAt: { type: Date, default: null },
+  reversedAt: { type: Date, default: null },
+  createdAt: { type: Date, default: Date.now },
+});
+giveawayInviteSchema.index({ giveawayId: 1, inviteeId: 1 }, { unique: true });
+const GiveawayInvite = mongoose.models.GiveawayInvite || mongoose.model('GiveawayInvite', giveawayInviteSchema);
+
+function _giveawayName(u) { if (!u) return null; return u.username ? `@${u.username}` : (u.firstName || `User ${u.userId}`); }
+
+// Called the first time a user ever marks any lecture watched. Confirms their
+// pending invite (if any) so the inviter's giveaway count only goes up once
+// there's real engagement, not just a /start tap — this is what keeps fake
+// "joined but never used the bot" referrals from counting.
+async function confirmGiveawayInviteOnFirstWatch(userId) {
+  try {
+    const Giveaway = mongoose.model('Giveaway');
+    const GiveawayParticipant = mongoose.model('GiveawayParticipant');
+    const User = mongoose.model('User');
+    const giveaway = await Giveaway.findOne({ status: 'active' }).sort({ startedAt: -1 });
+    if (!giveaway) return;
+    const inviteeNum = Number(userId);
+    const invite = await GiveawayInvite.findOne({ giveawayId: giveaway._id, inviteeId: inviteeNum, status: 'pending' });
+    if (!invite) return;
+    invite.status = 'confirmed'; invite.confirmedAt = new Date();
+    await invite.save();
+    const participant = await GiveawayParticipant.findOneAndUpdate(
+      { giveawayId: giveaway._id, userId: invite.inviterId },
+      { $inc: { invites: 1 } },
+      { new: true }
+    );
+    if (!participant || !_bot) return;
+    const inviteeUser = await User.findOne({ userId: String(inviteeNum) }).catch(() => null);
+    const inviteeName = _giveawayName(inviteeUser) || `User ${inviteeNum}`;
+    _bot.sendMessage(invite.inviterId, `✅ <b>Referral Confirmed</b>\n\n${inviteeName} has watched their first lecture — this referral is now confirmed.\nUpdated Confirmed Invites: <b>${participant.invites}</b>`, { parse_mode: 'HTML' }).catch(() => {});
+    if (OWNER_ID) {
+      const inviterUser = await User.findOne({ userId: String(invite.inviterId) }).catch(() => null);
+      const inviterName = _giveawayName(inviterUser) || `User ${invite.inviterId}`;
+      _bot.sendMessage(OWNER_ID, `📈 <b>Giveaway — Referral Confirmed</b>\n\nInviter: ${inviterName} (<code>${invite.inviterId}</code>)\nInvitee: ${inviteeName} (<code>${inviteeNum}</code>)\nInviter's updated invite count: <b>${participant.invites}</b>`, { parse_mode: 'HTML' }).catch(() => {});
+    }
+  } catch (e) { console.error('Giveaway confirm error:', e.message); }
+}
+
+// ── Multi-account (shared device/IP) detection ──────────────────────────────
+// Telegram's Bot API never exposes device info or IP to the bot side — this
+// signal only exists because the Mini App talks to our own server over HTTP.
+// Every /device-check carries the caller's IP, a persistent random browser/WebView
+// installation ID, and a hashed browser/environment fingerprint. The persistent
+// ID is the high-confidence installation signal. Browser fingerprint is retained
+// only as supporting evidence because identical phone models can collide; it is
+// never labelled as 'Same Device' by itself. IP is lower confidence again due to
+// shared WiFi/hostel/college/carrier NAT. This is manual-review evidence only and
+// never auto-bans a user.
+const DEVICE_CORRELATION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const DEVICE_RETENTION_MS = 45 * 24 * 60 * 60 * 1000; // prune buffer
+
+function checkMultiAccount(userId, deviceId, browserFingerprint, ip, fromUser) {
+  try {
+    const uidStr = String(userId);
+
+    // Trusted staff accounts are intentionally excluded from same-device/IP
+    // correlation. This applies to every registered admin, regardless of their
+    // individual permissions, and prevents an admin's own phone/Wi-Fi from
+    // creating noisy multi-account alerts for the owner.
+    if (isAnyAdmin(userId)) return;
+    const nonAdminOnly = rows => (rows || []).filter(r => !isAnyAdmin(r.userId));
+
+    const beforeDevice = deviceId ? nonAdminOnly(db.deviceSighting.distinctUsersForFingerprint(deviceId, DEVICE_CORRELATION_WINDOW_MS)) : [];
+    const beforeBrowser = browserFingerprint ? nonAdminOnly(db.deviceSighting.distinctUsersForBrowserFingerprint(browserFingerprint, DEVICE_CORRELATION_WINDOW_MS)) : [];
+    const beforeIp = ip ? nonAdminOnly(db.deviceSighting.distinctUsersForIp(ip, DEVICE_CORRELATION_WINDOW_MS)) : [];
+    const wasNewToDevice = deviceId && !beforeDevice.some(r => r.userId === uidStr);
+    const wasNewToBrowser = browserFingerprint && !beforeBrowser.some(r => r.userId === uidStr);
+    const wasNewToIp = ip && !beforeIp.some(r => r.userId === uidStr);
+
+    db.deviceSighting.insert({
+      id: db.generateId(), userId: uidStr,
+      fingerprint: deviceId, browserFingerprint, ip, seenAt: Date.now()
+    });
+    db.deviceSighting.pruneOlderThan(DEVICE_RETENTION_MS);
+
+    if (!OWNER_ID || !_bot) return;
+    if (!wasNewToDevice && !wasNewToBrowser && !wasNewToIp) return;
+
+    // Re-fetch after inserting this sighting so every cluster includes the
+    // current account. Persistent device-ID is high confidence. Browser
+    // fingerprint alone is NOT enough for an automatic alert because two
+    // identical phones can collide; it is promoted to a medium-confidence
+    // signal only when the same accounts also share the current IP.
+    const deviceCluster = deviceId ? nonAdminOnly(db.deviceSighting.distinctUsersForFingerprint(deviceId, DEVICE_CORRELATION_WINDOW_MS)) : [];
+    const browserCluster = browserFingerprint ? nonAdminOnly(db.deviceSighting.distinctUsersForBrowserFingerprint(browserFingerprint, DEVICE_CORRELATION_WINDOW_MS)) : [];
+    const ipCluster = ip ? nonAdminOnly(db.deviceSighting.distinctUsersForIp(ip, DEVICE_CORRELATION_WINDOW_MS)) : [];
+
+    const deviceAccounts = wasNewToDevice && deviceCluster.length >= 2 ? deviceCluster : null;
+    const ipAccounts = wasNewToIp && ipCluster.length >= 2 ? ipCluster : null;
+
+    let browserAccounts = null;
+    if (wasNewToBrowser && browserCluster.length >= 2 && ipCluster.length >= 2) {
+      const ipIds = new Set(ipCluster.map(r => String(r.userId)));
+      const overlap = browserCluster.filter(r => ipIds.has(String(r.userId)));
+      if (overlap.length >= 2) browserAccounts = overlap;
+    }
+
+    if (!deviceAccounts && !browserAccounts && !ipAccounts) return;
+    sendMultiAccountAlert(deviceAccounts, browserAccounts, ipAccounts);
+  } catch (err) { console.error("Multi-account check error:", err.message); }
+}
+
+// Formats the FULL member list for a cluster (every account currently sharing
+// that signal, not just the newest one) — name, username, and userId each.
+function _formatAccountList(accounts) {
+  const rows = accounts.slice(0, 15).map(a => {
+    const u = db.user.findOne(a.userId);
+    const label = u ? ([u.firstName, u.lastName].filter(Boolean).join(' ').trim() || `User ${a.userId}`) + (u.username ? ` (@${u.username})` : '') : `User ${a.userId}`;
+    return `• ${esc(label)} — <code>${a.userId}</code>`;
+  });
+  if (accounts.length > 15) rows.push(`…and ${accounts.length - 15} more`);
+  return rows.join("\n");
+}
+
+// Confidence is explicit so a coarse browser/environment match can never be
+// mistaken for proof that two Telegram accounts are on one physical device.
+function sendMultiAccountAlert(deviceAccounts, browserAccounts, ipAccounts) {
+  try {
+    let text = `👥 <b>Possible Multi-Account Detected</b>\n\n`;
+    if (deviceAccounts) {
+      text += `🔴 <b>Same persistent device ID</b> — HIGH confidence (${deviceAccounts.length} accounts):\n${_formatAccountList(deviceAccounts)}\n\n`;
+    }
+    if (browserAccounts) {
+      text += `🟠 <b>Browser fingerprint + same IP</b> — MEDIUM confidence (${browserAccounts.length} accounts):\n${_formatAccountList(browserAccounts)}\n<i>Browser fingerprints can collide on identical devices, so review manually.</i>\n\n`;
+    }
+    if (ipAccounts) {
+      text += `🟡 <b>Same IP Address</b> — LOW confidence (${ipAccounts.length} accounts):\n${_formatAccountList(ipAccounts)}\n<i>Could be shared WiFi/hostel/college/mobile carrier NAT.</i>\n\n`;
+    }
+    _bot.sendMessage(OWNER_ID, text.trim(), { parse_mode: "HTML" }).catch(() => {});
+  } catch (err) { console.error("Multi-account alert error:", err.message); }
+}
+
+// POST — called once per app session. The persistent random ID is the strongest
+// browser-installation signal. A separate hashed browser/environment fingerprint
+// is stored as supporting evidence and is never treated as proof by itself.
+router.post('/device-check', (req, res) => {
+  try {
+    const userId = getRequestUserId(req);
+    if (!userId) return res.json({ ok: false });
+
+    const rawDeviceId = String(req.body?.fingerprint || '').slice(0, 128);
+    const deviceId = /^dev2_[A-Za-z0-9_-]{16,120}$/.test(rawDeviceId) ? rawDeviceId : '';
+
+    const rawBrowserFp = String(req.body?.browserFingerprint || '').slice(0, 128);
+    const browserFingerprint = /^bfp2_[A-Za-z0-9_-]{8,120}$/.test(rawBrowserFp) ? rawBrowserFp : '';
+
+    // req.ip resolves the real client IP from X-Forwarded-For because
+    // server.js sets app.set('trust proxy', true).
+    const ip = String(req.ip || req.connection?.remoteAddress || '').slice(0, 64);
+    const u = db.user.findOne(userId);
+    checkMultiAccount(userId, deviceId, browserFingerprint, ip, { id: userId, username: u?.username, first_name: u?.firstName });
+    res.json({ ok: true });
+  } catch (e) { res.json({ ok: false }); }
+});
+
+// GET — is the current user (identified via verified initData) banned?
+// Uses getRequestUserId (verified initData), not a raw :userId param, so a user
+// can't probe someone else's ban status by guessing IDs. Deliberately does NOT
+// return the ban reason — that's internal admin context (e.g. "3+ requests in
+// 5 min") and telling a banned user the exact detection rule just teaches them
+// how to stay under it next time.
+router.get('/banned/me', (req, res) => {
+  try {
+    const userId = getRequestUserId(req);
+    if (!userId) return res.json({ banned: false });
+    const banned = db.bannedUser.isBanned(userId);
+    res.json({ banned });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET — is the current user exempt from the ad-blocker hard-block gate?
+// Owner is exempt automatically on the frontend before this is ever called;
+// this covers the additional per-user exemption list (/exemptads command).
+router.get('/adblock-exempt/me', (req, res) => {
+  try {
+    const userId = getRequestUserId(req);
+    if (!userId) return res.json({ exempt: false });
+    res.json({ exempt: db.adblockExempt.isExempt(userId) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET — full list of lectureIds this user has marked watched
+router.get('/watched/:userId', (req, res) => {
+  try {
+    const watched = db.watchedLecture.listByUser(req.params.userId);
+    res.json({ watched });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST — mark or unmark a single lecture as watched
+router.post('/watched/:userId', (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const { lectureId, watched } = req.body;
+    if (!lectureId) return res.status(400).json({ error: 'lectureId required' });
+
+    if (watched === false) {
+      db.watchedLecture.unmark(userId, lectureId);
+      WatchedLecture.deleteOne({ userId, lectureId }).catch(() => {});
+    } else {
+      const hadWatchedBefore = db.watchedLecture.listByUser(userId).length > 0;
+      db.watchedLecture.mark(userId, lectureId);
+      WatchedLecture.updateOne({ userId, lectureId }, { userId, lectureId, watchedAt: new Date() }, { upsert: true }).catch(() => {});
+      if (!hadWatchedBefore) confirmGiveawayInviteOnFirstWatch(userId);
+    }
+    res.json({ success: true, lectureId, watched: watched !== false });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET — giveaway status for the webapp: whether one is live, and if this user
+// is participating, their invite count/rank (mirrors the bot's /myscore).
+router.get('/giveaway/status/:userId', async (req, res) => {
+  try {
+    const Giveaway = mongoose.model('Giveaway');
+    const GiveawayParticipant = mongoose.model('GiveawayParticipant');
+    const giveaway = await Giveaway.findOne({ status: 'active' }).sort({ startedAt: -1 });
+    if (!giveaway) return res.json({ active: false });
+    const userId = Number(req.params.userId);
+    const participant = await GiveawayParticipant.findOne({ giveawayId: giveaway._id, userId });
+    if (!participant) return res.json({ active: true, participating: false, giveawayId: String(giveaway._id) });
+    const higher = await GiveawayParticipant.countDocuments({ giveawayId: giveaway._id, $or: [ { invites: { $gt: participant.invites } }, { invites: participant.invites, joinedAt: { $lt: participant.joinedAt } } ] });
+    res.json({ active: true, participating: true, invites: participant.invites, rank: higher + 1, giveawayId: String(giveaway._id) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Force Join ────────────────────────────────────────────────────────────────
+
+function getForceJoinChannels() {
+  const ids = (process.env.FORCE_JOIN_CHANNELS||'').split(',').map(s => s.trim()).filter(Boolean);
+  const names = (process.env.FORCE_JOIN_CHANNEL_NAMES||'').split(',').map(s => s.trim());
+  const links = (process.env.FORCE_JOIN_CHANNEL_LINKS||'').split(',').map(s => s.trim());
+  return ids.map((id, i) => ({ id, name: names[i]||('Channel '+(i+1)), link: links[i]||null }));
+}
+
+router.get('/force-join/channels', (req, res) => {
+  const channels = getForceJoinChannels();
+  res.json({ channels, required: channels.length > 0 });
+});
+
+const _channelInfoCache = new Map();
+async function getChannelInfo(chatId, botToken) {
+  const now = Date.now();
+  const cached = _channelInfoCache.get(chatId);
+  if (cached && now - cached.cachedAt < 10 * 60 * 1000) return cached;
+  try {
+    const chatRes = await fetch(`https://api.telegram.org/bot${botToken}/getChat?chat_id=${encodeURIComponent(chatId)}`);
+    const chatData = await chatRes.json();
+    const chat = chatData.ok ? chatData.result : null;
+    const title = chat ? (chat.title||chat.first_name||'') : '';
+    const username = chat ? (chat.username||'') : '';
+    let photoUrl = null;
+    if (chat && chat.photo && chat.photo.small_file_id) {
+      try {
+        const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${encodeURIComponent(chat.photo.small_file_id)}`);
+        const fileData = await fileRes.json();
+        if (fileData.ok && fileData.result && fileData.result.file_path) photoUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+      } catch (_) {}
+    }
+    const redirectLink = username ? `https://t.me/${username}` : (chat && chat.invite_link ? chat.invite_link : null);
+    const info = { title, username, photoUrl, redirectLink, cachedAt: now };
+    _channelInfoCache.set(chatId, info);
+    return info;
+  } catch (e) { return { title: '', username: '', photoUrl: null, redirectLink: null, cachedAt: now }; }
+}
+
+router.post('/force-join/check', async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+  const channels = getForceJoinChannels();
+  if (!channels.length) return res.json({ allJoined: true, channels: [] });
+  const BOT_TOKEN = process.env.BOT_TOKEN;
+  if (!BOT_TOKEN) return res.status(500).json({ error: 'BOT_TOKEN not set' });
+  const results = await Promise.all(channels.map(async (ch) => {
+    const [memberData, info] = await Promise.all([
+      fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(ch.id)}&user_id=${encodeURIComponent(userId)}`).then(r => r.json()).catch(() => ({})),
+      getChannelInfo(ch.id, BOT_TOKEN),
+    ]);
+    const status = memberData.result && memberData.result.status;
+    const joined = ['member','administrator','creator'].includes(status);
+    return { id: ch.id, name: ch.name !== ('Channel '+(channels.indexOf(ch)+1)) ? ch.name : (info.title||ch.name), link: ch.link||info.redirectLink||null, photoUrl: info.photoUrl||null, joined, status: status||'not_member' };
+  }));
+  res.json({ allJoined: results.every(c => c.joined), channels: results });
+});
+
+// ── Auto-Lecture ──────────────────────────────────────────────────────────────
+
+router.get('/auto-lecture/status', verifyPower('autoLecture'), (req, res) => { res.json(autoLectureSession); });
+
+router.post('/auto-lecture/start', verifyPower('autoLecture'), async (req, res) => {
+  const { batchId, subjectId, chapterId, unitId, batchName, subjectName, chapterName, unitName } = req.body;
+  if (!batchId || !subjectId || !chapterId) return res.status(400).json({ error: 'batchId, subjectId, chapterId required' });
+  try {
+    const batchData = db.batch.getOne(batchId);
+    const subj = batchData && (batchData.subjects||[]).find(s => String(s._id)===subjectId);
+    const chap = subj && (subj.chapters||[]).find(c => String(c._id)===chapterId);
+    if (!chap) return res.status(404).json({ error: 'Chapter not found' });
+    let existingCount = unitId ? ((chap.units||[]).find(u => String(u._id)===unitId)?.lectures||[]).length : (chap.lectures||[]).length;
+    // lastLectureId always resets to null on a fresh start — otherwise a PDF
+    // sent before any video in this new session could attach itself to a
+    // stale lecture left over from a previous session/chapter.
+    Object.assign(autoLectureSession, { active: true, batchId, subjectId, chapterId, unitId: unitId||null, lectureCount: existingCount, batchName: batchName||'', subjectName: subjectName||'', chapterName: chapterName||'', unitName: unitName||'', lastLectureId: null, lastActionType: null });
+    await _saveAutoSession();
+    res.json({ success: true, session: autoLectureSession });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/auto-lecture/stop', verifyPower('autoLecture'), async (req, res) => {
+  const totalAdded = autoLectureSession.lectureCount;
+  Object.assign(autoLectureSession, { active: false, batchId: null, subjectId: null, chapterId: null, unitId: null, lectureCount: 0, batchName: '', subjectName: '', chapterName: '', unitName: '', lastLectureId: null, lastActionType: null });
+  await _saveAutoSession();
+  res.json({ success: true, totalAdded });
+});
+
+router.autoLectureSession = autoLectureSession;
+router.autoAddLecture = autoAddLecture;
+router.autoSetLectureNotes = autoSetLectureNotes;
+router.autoFindFirstMissingNotes = autoFindFirstMissingNotes;
+router.autoDeleteLecture = autoDeleteLecture;
+router.saveAutoSession = _saveAutoSession;
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
+function buildStatsSnapshot() {
+    const batches = db.batch.getAll();
+    const totalBatches = batches.length;
+    const publicBatches = batches.filter(b => b.isPublic).length;
+    let totalSubjects=0, totalChapters=0, totalLectures=0, totalPremiumUnlocks=0;
+    batches.forEach(b => {
+      totalPremiumUnlocks += (b.premiumUsers||[]).length;
+      totalSubjects += (b.subjects||[]).length;
+      (b.subjects||[]).forEach(s => {
+        totalChapters += (s.chapters||[]).length;
+        (s.chapters||[]).forEach(c => {
+          totalLectures += (c.lectures||[]).length;
+          (c.units||[]).forEach(u => { totalLectures += (u.lectures||[]).length; });
+        });
+      });
+    });
+
+    // File store health: how many stored files have a channel backup (can survive
+    // a bot-token switch via /migrate) vs ones that don't (would need re-upload
+    // if their file_id ever goes bad).
+    const singleTotal = db.fileRecord.count();
+    const singleWithBackup = db.fileRecord.findAllWithChannelMsg().length;
+    const allBulkBatches = db.bulkBatch.findAll();
+    let bulkFileTotal=0, bulkFileWithBackup=0;
+    allBulkBatches.forEach(b => { (b.files||[]).forEach(f => { bulkFileTotal++; if (f.channel_msg_id) bulkFileWithBackup++; }); });
+
+    const coupons = db.coupon.getAll();
+    const activeCoupons = coupons.filter(c => c.isActive && c.expiresAt.getTime() > Date.now()).length;
+
+    const now = Date.now();
+    return {
+      content: { totalBatches, publicBatches, privateBatches: totalBatches - publicBatches, totalSubjects, totalChapters, totalLectures, totalPremiumUnlocks },
+      users: {
+        totalUsers: db.user.count(),
+        recentUsers: db.user.countSince(now - 7*24*60*60*1000),
+        newToday: db.user.countSince(now - 24*60*60*1000),
+      },
+      access: {
+        totalAccess: db.access.count(),
+        activeAccess: db.access.countActive(),
+        grantedToday: db.access.countClaimedOnDay(new Date().toISOString().slice(0, 10)),
+      },
+      adsFree: (() => {
+        const activeRows = db.adsFree.getAllActive();
+        const allRows = db.adsFree.getAll();
+        const dayMs = 24 * 60 * 60 * 1000;
+        const active = activeRows.length;
+        const expiring24h = activeRows.filter(r => Number(r.expiresAt) <= now + dayMs).length;
+        const expiring7d = activeRows.filter(r => Number(r.expiresAt) <= now + 7 * dayMs).length;
+        const expired = allRows.filter(r => Number(r.expiresAt) <= now).length;
+        const weeklyPrice = Number(db.settings.get('adsFreePrice_weekly', Number(process.env.ADS_FREE_WEEKLY_PRICE || 20)));
+        const monthlyPrice = Number(db.settings.get('adsFreePrice_monthly', Number(process.env.ADS_FREE_MONTHLY_PRICE || 60)));
+        return { active, expiring24h, expiring7d, expired, totalRecords: allRows.length, weeklyPrice, monthlyPrice };
+      })(),
+      referrals: (() => {
+        const totalReferrals = db.referral.count();
+        const uniqueReferrers = db.referral.distinctReferrers();
+        const top5 = db.referral.topReferrers(5).map((r) => {
+          const u = db.user.findOne(r.referrerId);
+          const name = u ? (u.firstName || u.username || `User ${r.referrerId}`) : `User ${r.referrerId}`;
+          return { userId: r.referrerId, name, count: r.c };
+        });
+        return {
+          totalReferrals,
+          uniqueReferrers,
+          referralsToday: db.referral.countSince(now - 24*60*60*1000),
+          referralsThisWeek: db.referral.countSince(now - 7*24*60*60*1000),
+          avgPerReferrer: uniqueReferrers > 0 ? +(totalReferrals / uniqueReferrers).toFixed(1) : 0,
+          totalPointsEarned: totalReferrals * POINTS_PER_REFERRAL,
+          topReferrers: top5,
+        };
+      })(),
+      spinWheel: {
+        spinsToday: db.spinHistory.countSinceGlobal(now - 24*60*60*1000),
+        totalSpinners: db.spinHistory.distinctSpinners(),
+        totalPtsEarned: db.spinHistory.totalEarnedGlobal(),
+        totalPtsRedeemed: db.rewardRedemption.totalSpentGlobal(),
+      },
+      fileStore: {
+        singleFiles: singleTotal,
+        singleFilesWithBackup: singleWithBackup,
+        singleFilesNoBackup: singleTotal - singleWithBackup,
+        bulkBatches: allBulkBatches.length,
+        bulkFiles: bulkFileTotal,
+        bulkFilesWithBackup: bulkFileWithBackup,
+        bulkFilesNoBackup: bulkFileTotal - bulkFileWithBackup,
+      },
+      rewards: {
+        totalRedemptions: db.rewardRedemption.count(),
+        activeBatchUnlocks: db.batchRewardAccess.countActive(),
+      },
+      coupons: { total: coupons.length, active: activeCoupons },
+      pendingDeletes: db.pendingDelete.getAll().length,
+    };
+}
+
+router.get('/stats', verifyPower('viewStats'), (req, res) => {
+  try { res.json(buildStatsSnapshot()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ── Coupons ───────────────────────────────────────────────────────────────────
+
+const couponSchema = new mongoose.Schema({ code: { type: String, required: true, unique: true, uppercase: true, trim: true }, discountPct: { type: Number, required: true }, expiresAt: { type: Date, required: true }, isActive: { type: Boolean, default: true }, usageCount: { type: Number, default: 0 }, batchIds: [{ type: String }], createdAt: { type: Date, default: Date.now } });
+const Coupon = mongoose.model('Coupon', couponSchema);
+
+router.get('/coupons', verifyPower('coupons'), (req, res) => {
+  try { res.json(db.coupon.getAll()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/coupons', verifyPower('coupons'), async (req, res) => {
+  try {
+    const { code, discountPct, expiresAt, isActive, batchIds } = req.body;
+    if (!code || !discountPct || !expiresAt) return res.status(400).json({ error: 'code, discountPct, expiresAt required' });
+    // Write to MongoDB to get _id
+    const c = await Coupon.create({ code: code.toUpperCase().trim(), discountPct: Number(discountPct), expiresAt: new Date(expiresAt), isActive: isActive!==false, batchIds: Array.isArray(batchIds) ? batchIds.filter(Boolean) : [] });
+    db.coupon.insert({ id: String(c._id), code: c.code, discountPct: c.discountPct, expiresAt: c.expiresAt, isActive: c.isActive, batchIds: c.batchIds, createdAt: c.createdAt });
+    res.json(db.coupon.findById(String(c._id)));
+  } catch (e) {
+    if (e.code === 11000) return res.status(400).json({ error: 'Coupon code already exists' });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/coupons/:id', verifyPower('coupons'), async (req, res) => {
+  try {
+    await Coupon.findByIdAndDelete(req.params.id);
+    db.coupon.delete(req.params.id);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.patch('/coupons/:id/toggle', verifyPower('coupons'), async (req, res) => {
+  try {
+    const c = db.coupon.toggle(req.params.id);
+    if (!c) return res.status(404).json({ error: 'Not found' });
+    // MongoDB backup
+    Coupon.findByIdAndUpdate(req.params.id, { isActive: c.isActive }).catch(() => {});
+    res.json(c);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/coupons/validate', (req, res) => {
+  try {
+    const { code, batchId } = req.body;
+    if (!code) return res.status(400).json({ error: 'code required' });
+    const coupon = db.coupon.findByCode(code);
+    if (!coupon) return res.status(404).json({ error: 'Invalid coupon code' });
+    if (!coupon.isActive) return res.status(400).json({ error: 'Coupon is inactive' });
+    if (coupon.expiresAt < new Date()) return res.status(400).json({ error: 'Coupon has expired' });
+    if (coupon.batchIds && coupon.batchIds.length > 0) {
+      if (!batchId || !coupon.batchIds.includes(String(batchId))) return res.status(400).json({ error: 'This coupon is not valid for this batch' });
+    }
+    res.json({ valid: true, discountPct: coupon.discountPct, code: coupon.code });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ── Multi-select: send several lectures / notes in ONE go ────────────────────
+// The Mini App lets a student tick many lectures and notes. We resolve each one
+// server-side (so premium rules are enforced here, not trusted from the client),
+// pack the Telegram files into a short-lived bulk batch and return ONE deep link.
+// The bot's existing batch delivery (/start B…) then sends everything, keeping
+// its daily video limit, 6-hour auto-delete and ban checks untouched.
+const MULTI_SEND_MAX_ITEMS = 30;
+const _multiSendHits = new Map();   // userId -> [timestamps] (rate limit)
+
+function _parseStartCode(link) {
+  try {
+    const u = new URL(String(link || '').trim());
+    const host = u.hostname.toLowerCase().replace(/^www\./, '');
+    if (host !== 't.me' && host !== 'telegram.me') return null;
+    const c = u.searchParams.get('start');
+    return c && /^[A-Za-z0-9_-]{4,64}$/.test(c) ? c : null;
+  } catch (_) { return null; }
+}
+function _findLectureInBatch(batch, lectureId) {
+  for (const s of (batch.subjects || [])) for (const c of (s.chapters || [])) {
+    for (const l of (c.lectures || [])) if (String(l._id) === lectureId) return l;
+    for (const u of (c.units || [])) for (const l of (u.lectures || [])) if (String(l._id) === lectureId) return l;
+  }
+  return null;
+}
+
+router.post('/lectures/send', async (req, res) => {
+  try {
+    const userId = getRequestUserId(req);
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+    if (!_botUsername) return res.status(503).json({ error: 'Bot not ready, try again in a moment' });
+
+    const now = Date.now();
+    const hits = (_multiSendHits.get(userId) || []).filter((t) => now - t < 60000);
+    if (hits.length >= 10) return res.status(429).json({ error: 'Too many requests. Wait a minute.' });
+    hits.push(now); _multiSendHits.set(userId, hits);
+
+    const { batchId, items } = req.body || {};
+    if (!batchId || !Array.isArray(items) || !items.length) return res.status(400).json({ error: 'Nothing selected' });
+    if (items.length > MULTI_SEND_MAX_ITEMS) return res.status(400).json({ error: `Select at most ${MULTI_SEND_MAX_ITEMS} items at once` });
+
+    const batch = db.batch.getOne(String(batchId));
+    if (!batch) return res.status(404).json({ error: 'Batch not found' });
+    const admin = isAdminRequest(req);
+    const entitled = admin || !batch.isPremium || hasPremiumAccess(userId, batch);
+
+    const files = [], skipped = [], external = [], seen = new Set();
+    const pushRecord = (rec) => { const k = rec.id || rec._id || rec.code || rec.file_id; if (k && seen.has(k)) return false; if (k) seen.add(k); files.push(rec); return true; };
+
+    for (const it of items) {
+      const lectureId = String((it && it.lectureId) || '');
+      const type = it && it.type === 'notes' ? 'notes' : 'lecture';
+      const lec = _findLectureInBatch(batch, lectureId);
+      if (!lec) { skipped.push({ lectureId, type, reason: 'not_found' }); continue; }
+      if (lec.comingSoon) { skipped.push({ lectureId, type, reason: 'coming_soon' }); continue; }
+      if (!entitled && !lec.isDemo) { skipped.push({ lectureId, type, reason: 'no_access' }); continue; }
+
+      const link = type === 'notes' ? lec.notes : lec.link;
+      if (!link) { skipped.push({ lectureId, type, reason: 'no_link' }); continue; }
+      const code = _parseStartCode(link);
+      if (!code) {                                  // e.g. a Drive link for notes: can't be sent by the bot
+        if (type === 'notes' && /^https?:\/\//i.test(String(link))) external.push({ lectureId, type, url: String(link) });
+        else skipped.push({ lectureId, type, reason: 'unsupported_link' });
+        continue;
+      }
+      if (/^b/i.test(code)) {                       // link points at a bulk batch (several files)
+        const bb = db.bulkBatch.findByCode(code);
+        if (!bb || !(bb.files || []).length) { skipped.push({ lectureId, type, reason: 'not_found' }); continue; }
+        bb.files.forEach(pushRecord);
+      } else {
+        const rec = db.fileRecord.findByCode(code);
+        if (!rec) { skipped.push({ lectureId, type, reason: 'not_found' }); continue; }
+        pushRecord(rec);
+      }
+    }
+
+    if (!files.length) return res.json({ link: null, count: 0, skipped, external });
+
+    const batchCode = 'BS' + crypto.randomBytes(7).toString('hex').toUpperCase();
+    db.bulkBatch.create({ id: db.generateId(), batch_code: batchCode, user_id: 'ms_' + userId, files });
+    res.json({ link: `https://t.me/${_botUsername}?start=${batchCode}`, count: files.length, skipped, external });
+  } catch (e) {
+    console.error('lectures/send error:', e.message);
+    res.status(500).json({ error: 'Could not prepare your files' });
+  }
+});
+
+// Temporary multi-send batches are only needed for a few minutes: purge after 24h.
+const _multiPurge = setInterval(() => {
+  try { db.getDb().prepare("DELETE FROM bulk_batches WHERE user_id LIKE 'ms_%' AND created_at < ?").run(Date.now() - 24 * 3600 * 1000); }
+  catch (e) { /* table not ready yet — try again next hour */ }
+  const cutoff = Date.now() - 60000;
+  for (const [u, arr] of _multiSendHits) if (!arr.some((t) => t > cutoff)) _multiSendHits.delete(u);
+}, 3600 * 1000);
+if (_multiPurge.unref) _multiPurge.unref();
+
+module.exports = router;
+module.exports.getPointsBreakdown = getPointsBreakdown;
+module.exports.POINTS_PER_REFERRAL = POINTS_PER_REFERRAL;
+module.exports.setBot = setBot;
+module.exports.setGrantAdsFreeAccess = setGrantAdsFreeAccess;
+module.exports.setNotifyFreeAdsFreeGrant = setNotifyFreeAdsFreeGrant;
+module.exports.setBotCommandMenuSync = setBotCommandMenuSync;
+module.exports.getSpinStatus = getSpinStatus;
+module.exports.getSpinDailyLimit = getSpinDailyLimit;
+module.exports.hasAdminPower = hasAdminPower;
+module.exports.isAnyAdmin = isAnyAdmin;
+module.exports.ADMIN_POWER_DEFS = ADMIN_POWER_DEFS;
+module.exports.buildStatsSnapshot = buildStatsSnapshot;

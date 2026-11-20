@@ -1,23 +1,18 @@
 {
-  "name": "edubot-next",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Isolated EduBot V2 Telegram Mini App and Supabase PostgreSQL backend",
-  "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
-    "test": "node --test tests/*.test.js",
-    "check": "node --check src/server.js && node --check src/bot.js && node --check src/auth.js && node --check src/db.js && node --check src/v2-features.js && node --check public/app.js && node --check public/study-v2.js && node --check src/auto-save.js && node --check public/admin-media.js"
-  },
-  "engines": {
-    "node": ">=20"
-  },
+  "name": "edu-bot",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
   "dependencies": {
-    "dotenv": "^16.6.1",
-    "express": "^4.21.2",
-    "helmet": "^8.0.0",
-    "pg": "^8.13.3",
-    "socket.io": "^4.8.1",
-    "node-telegram-bot-api": "^0.66.0"
-  }
+    "better-sqlite3": "^11.10.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.18.2",
+    "jimp": "^1.6.1",
+    "mongoose": "^8.2.0",
+    "node-telegram-bot-api": "^0.64.0",
+    "paytmchecksum": "^1.5.1",
+    "qrcode": "^1.5.3",
+    "razorpay": "^2.9.8"
+  },
+  "engines": { "node": ">=18.0.0" }
 }
