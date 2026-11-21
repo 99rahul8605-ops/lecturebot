@@ -1,6 +1,14 @@
 # EduBot update: Study tab, multi-select lectures, new backend
 
-## Update 2 (this release)
+## Update 3: lectures not reaching the bot / notes opening a URL
+Root cause: lecture and notes values are stored as a **bare code** (`RbZUHU`) or a legacy t.me link (the app's own
+`openLecLink()` handles both). The new multi-select only understood full `https://t.me/...` links, so bare codes were
+rejected by the server ("unsupported link") and bare-code notes were treated as external URLs and opened directly.
+Fix: server and picker now accept bare codes, t.me / telegram.me links (with or without `https://`, any bot name),
+use the bot's lookup order (stored file first, then a `B...` bulk batch), and external notes open through `openLecLink`.
+Skipped items are logged as `[lectures/send] user <id> skipped: [...]` and the app shows a specific message.
+
+## Update 2
 * **Chat fixes:** the message box was rebuilt every 4s poll (typed text vanished), it sat behind the bottom nav,
   and load errors were silent. Now: the box is only rebuilt when your "can I write?" state changes, it sits above
   the nav, and an error message is shown if the chat can't load.

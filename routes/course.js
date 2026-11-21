@@ -2063,9 +2063,14 @@ router.post('/coupons/validate', (req, res) => {
 const MULTI_SEND_MAX_ITEMS = 30;
 const _multiSendHits = new Map();   // userId -> [timestamps] (rate limit)
 
+// A stored lecture/notes link can be: a bare code ("RbZUHU", the current format), a full t.me deep link,
+// a legacy link that points at an OLD bot name, or a t.me link without "https://". All map to the same code.
 function _parseStartCode(link) {
+  const v = String(link || '').trim();
+  if (!v) return null;
+  if (/^[A-Za-z0-9_-]{4,64}$/.test(v)) return v;                       // bare code
   try {
-    const u = new URL(String(link || '').trim());
+    const u = new URL(/^https?:\/\//i.test(v) ? v : 'https://' + v);
     const host = u.hostname.toLowerCase().replace(/^www\./, '');
     if (host !== 't.me' && host !== 'telegram.me') return null;
     const c = u.searchParams.get('start');
@@ -2119,17 +2124,15 @@ router.post('/lectures/send', async (req, res) => {
         else skipped.push({ lectureId, type, reason: 'unsupported_link' });
         continue;
       }
-      if (/^b/i.test(code)) {                       // link points at a bulk batch (several files)
-        const bb = db.bulkBatch.findByCode(code);
-        if (!bb || !(bb.files || []).length) { skipped.push({ lectureId, type, reason: 'not_found' }); continue; }
-        bb.files.forEach(pushRecord);
-      } else {
-        const rec = db.fileRecord.findByCode(code);
-        if (!rec) { skipped.push({ lectureId, type, reason: 'not_found' }); continue; }
-        pushRecord(rec);
-      }
+      // Same lookup order as the bot: a single stored file first, then (codes starting with "B") a bulk batch.
+      const rec = db.fileRecord.findByCode(code);
+      if (rec) { pushRecord(rec); continue; }
+      const bb = code.charAt(0) === 'B' ? db.bulkBatch.findByCode(code) : null;
+      if (bb && (bb.files || []).length) { bb.files.forEach(pushRecord); continue; }
+      skipped.push({ lectureId, type, reason: 'not_found' });
     }
 
+    if (skipped.length) console.warn('[lectures/send] user', userId, 'skipped:', JSON.stringify(skipped.slice(0, 10)));
     if (!files.length) return res.json({ link: null, count: 0, skipped, external });
 
     const batchCode = 'BS' + crypto.randomBytes(7).toString('hex').toUpperCase();

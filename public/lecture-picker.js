@@ -8,7 +8,19 @@
  * markLectureWatched, apiFetch, openLink, toast.
  */
 (function () {
-  var TG_LINK = /^https?:\/\/(www\.)?t(elegram)?\.me\//i;
+  // Stored values are either a bare bot code ("RbZUHU") or a t.me link (same dual format as openLecLink()).
+  // Anything else that looks like a web address (Drive, telegra.ph ...) can't be sent by the bot: it opens directly.
+  function isBotRef(v) {
+    v = String(v == null ? '' : v).trim();
+    if (!v) return false;
+    if (/^[A-Za-z0-9_-]{4,64}$/.test(v)) return true;
+    return /^(https?:\/\/)?(www\.)?t(elegram)?\.me\//i.test(v);
+  }
+  function openExternal(url) {
+    url = String(url).trim();
+    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+    if (typeof openLecLink === 'function') openLecLink(url, 'notes'); else openLink(url, 'notes');
+  }
   var P = { bid: null, lectures: [], sel: { lecture: {}, notes: {} }, type: 'lecture', sending: false };
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
@@ -81,7 +93,7 @@
       var cls = 'lp-card', icon = '', attrs = '';
       if (l.comingSoon) { cls += ' lp-cs'; attrs = ' disabled'; }
       else if (isLec && !l.link) { cls += ' lp-lock'; icon = '<i class="ti ti-lock"></i>'; attrs = ' data-lock="1"'; }
-      else if (!isLec && !TG_LINK.test(l.notes)) { cls += ' lp-ext'; icon = '<i class="ti ti-external-link"></i>'; attrs = ' data-ext="1"'; }
+      else if (!isLec && !isBotRef(l.notes)) { cls += ' lp-ext'; icon = '<i class="ti ti-external-link"></i>'; attrs = ' data-ext="1"'; }
       else if (P.sel[key][id]) { cls += ' lp-on'; icon = '<i class="ti ti-check"></i>'; attrs = ' aria-pressed="true"'; }
       else { if (isLec && isLectureWatched(id)) { cls += ' lp-done'; icon = '<i class="ti ti-check lp-dim-ic"></i>'; } attrs = ' aria-pressed="false"'; }
       return '<button class="' + cls + '"' + attrs + ' data-id="' + esc(id) + '" onclick="LecPicker.tap(this)">' +
@@ -110,7 +122,7 @@
       var l = P.lectures.filter(function (x) { return x._id === id; })[0];
       if (!l) return;
       if (btn.getAttribute('data-lock')) { toast('Premium access required for this lecture', 'error'); return; }
-      if (btn.getAttribute('data-ext')) { openLink(l.notes, 'notes'); return; }
+      if (btn.getAttribute('data-ext')) { openExternal(l.notes); return; }
       var key = P.type === 'notes' ? 'notes' : 'lecture';
       if (P.sel[key][id]) delete P.sel[key][id]; else P.sel[key][id] = true;
       renderSheet();
@@ -118,7 +130,7 @@
     selectAll: function () {
       var key = P.type === 'notes' ? 'notes' : 'lecture';
       P.lectures.forEach(function (l) {
-        if (key === 'lecture' ? hasLecture(l) : (hasNotes(l) && TG_LINK.test(l.notes))) P.sel[key][l._id] = true;
+        if (key === 'lecture' ? hasLecture(l) : (hasNotes(l) && isBotRef(l.notes))) P.sel[key][l._id] = true;
       });
       renderSheet();
     },
@@ -133,7 +145,14 @@
       P.sending = true; renderFoot();
       try {
         var res = await apiFetch('/api/lectures/send', 'POST', { batchId: P.bid, items: items });
-        if (!res.link) { toast('Could not send these. They may be locked or unavailable.', 'error'); return; }
+        if (!res.link) {
+          var rs = (res.skipped || []).map(function (s) { return s.reason; });
+          var why = rs.indexOf('no_access') >= 0 ? 'Premium access required for the selected lectures.'
+            : rs.indexOf('not_found') >= 0 ? 'These files are not available in the bot yet. Ask the admin to re-upload.'
+            : rs.indexOf('unsupported_link') >= 0 ? 'These links are not Telegram files, so they cannot be sent to the bot.'
+            : 'Could not send these. They may be locked or unavailable.';
+          toast(why, 'error'); return;
+        }
         var skip = {}; (res.skipped || []).forEach(function (s) { skip[s.lectureId + ':' + s.type] = true; });
         items.forEach(function (it) { if (it.type === 'lecture' && !skip[it.lectureId + ':lecture'] && typeof markLectureWatched === 'function') markLectureWatched(it.lectureId); });
         if ((res.skipped || []).length) toast((res.skipped.length) + ' item(s) skipped (locked or unavailable)', 'error');
