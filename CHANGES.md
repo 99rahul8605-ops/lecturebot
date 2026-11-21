@@ -1,5 +1,20 @@
 # EduBot update: Study tab, multi-select lectures, new backend
 
+## Update 6: remaining pages (new look applied everywhere)
+* **Bottom nav** is now Home | Study | Rewards | Profile. Rewards = the old Access / Refer / Earn pages behind one tab with a
+  segmented switch at the top of each (pages + logic unchanged; the old three nav buttons stay in the DOM, hidden, because
+  `switchNavTab()` toggles them by id). The access status dot moved onto the Rewards tab.
+* **Ads paused (moderation) mode** is respected: Rewards then opens Refer only, the switch is hidden and Profile hides "Access".
+* **Profile page (new)** takes the Admin button and the theme toggle out of the Home topbar (same DOM nodes + ids, just moved).
+* **Admin panel:** tabs became a 3-column tile grid (+ Lecture highlighted), rounded 28px sheet, new inputs/buttons.
+* **Spin wheel / Access / Refer / forms / popups** restyled via `theme-focus.css`; text on accent2 backgrounds flips with the theme.
+* New file: `public/rewards-ui.js`.
+
+## Update 5: invisible text in the Study tab
+`#page-study button{color:inherit}` outranked every component class (an #id beats classes), so active tabs, Start/Save
+buttons, chips etc. got dark text on dark fills. The default is now wrapped in `:where()` (zero specificity), so each
+component's own colour wins. Needs a WebView that supports `:where()` (Chrome/WebView 88+, Safari 14+).
+
 ## Update 4: the bot's video limits now apply to multi-select
 The bot allows at most **3 lecture videos in a chat at once** (a 4th deletes the oldest immediately; owner exempt) and
 **10 videos/day** (owner / admins with "bypass" exempt). Notes (documents) are not counted. Without handling this,

@@ -108,3 +108,67 @@ body{font-family:var(--font-body)}
 /* chapter progress */
 .chap-bar{height:4px;border-radius:2px;background:var(--surface3);overflow:hidden;margin-top:8px}
 .chap-bar>div{height:100%;border-radius:2px;background:var(--text)}
+
+/* ══ Update: remaining pages ═══════════════════════════════════════════════════ */
+
+/* ── 9. Bottom nav: Home | Study | Rewards | Profile (legacy tabs stay hidden) ── */
+.nav-tab{position:relative}
+.nav-tab[hidden],#navAccess,#navRefer,#navEarn{display:none!important}
+#navRewards .access-dot{position:absolute!important;top:7px;right:7px;margin:0!important}
+
+/* ── 10. Rewards: segmented switch on Access / Refer / Earn ────────────────── */
+.rw-seg{display:flex;gap:4px;margin:4px 16px 8px;padding:4px;border-radius:16px;background:var(--surface3);flex-shrink:0}
+.rw-seg button{flex:1;min-height:40px;border:0;border-radius:12px;background:transparent;color:var(--text2);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer}
+.rw-seg button.on{background:var(--text);color:var(--bg)}
+.card{border-radius:24px}
+[style*="rgba(124,92,191"]{border-color:var(--border)!important}
+
+/* spin wheel */
+.spin-wheel{background:conic-gradient(#FFD9C2 0deg 72deg,#CDEBDD 72deg 144deg,#DCD6F7 144deg 216deg,#CFE6F5 216deg 288deg,#D4F25C 288deg 360deg)!important;border:6px solid var(--ink)}
+.spin-wheel-label{color:var(--ink)!important;text-shadow:none}
+.spin-wheel-pointer{color:var(--text)}
+.spin-wheel-center{background:var(--ink);border-color:var(--ink);color:var(--lime)}
+.spin-btn,.watch-ad-btn{width:100%;min-height:52px;border-radius:26px;background:var(--accent)}
+.spin-status-pill{background:var(--surface3);color:var(--text2)}
+/* access card */
+.access-card{border-radius:28px}
+
+/* ── 11. Profile page ──────────────────────────────────────────────────────── */
+.pf-wrap{padding:8px 16px 16px;display:flex;flex-direction:column;gap:14px}
+.pf-card{display:flex;align-items:center;gap:14px;padding:18px;border-radius:28px;background:var(--ink);color:#F4F1EA}
+.pf-av{width:64px;height:64px;border-radius:50%;background:var(--lime);color:var(--ink);display:flex;align-items:center;justify-content:center;font-family:var(--font-head);font-size:26px;font-weight:800;overflow:hidden;flex-shrink:0}
+.pf-av img{width:100%;height:100%;object-fit:cover}
+.pf-info{min-width:0}
+.pf-name{font-family:var(--font-head);font-size:22px;font-weight:800;letter-spacing:-.4px}
+.pf-sub{font-size:13px;color:#B5AFA2;margin-top:2px}
+.pf-list{display:flex;flex-direction:column;gap:10px}
+.pf-row{display:flex;align-items:center;gap:12px;width:100%;min-height:58px;padding:0 16px;border:1px solid var(--border);border-radius:20px;background:var(--surface);color:var(--text);font-family:inherit;font-size:15px;font-weight:700;text-align:left;cursor:pointer;box-sizing:border-box}
+.pf-row>span{flex:1}
+.pf-row>i:first-child{font-size:20px;color:var(--text2)}
+.pf-arr{color:var(--text3);font-size:18px}
+#pfAdminSlot .admin-btn.visible{width:100%;min-height:58px;padding:0 16px;border:1px solid var(--border);border-radius:20px;background:var(--surface);color:var(--text);font-size:15px;font-weight:700;gap:12px;box-sizing:border-box}
+#pfAdminSlot .admin-btn i{font-size:20px!important;color:var(--text2)}
+
+/* ── 12. Admin panel + forms + popups ──────────────────────────────────────── */
+.modal-overlay{background:rgba(0,0,0,.55)}
+.modal{border-radius:28px 28px 0 0;background:var(--bg);padding:12px 18px 24px}
+.modal-title{font-family:var(--font-head);font-size:22px;font-weight:800;letter-spacing:-.4px;margin-bottom:16px}
+.modal-close{width:44px;height:44px;background:var(--surface3);color:var(--text)}
+#adminModal .tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;overflow:visible;margin-bottom:18px}
+#adminModal .tab-btn{min-height:44px;padding:0 8px;border:0;border-radius:16px;background:var(--surface3);color:var(--text);font-size:12px;font-weight:700;white-space:normal;text-align:center}
+#adminModal .tab-btn.active{background:var(--text);color:var(--bg)}
+#adminModal #adminTabLecture.tab-btn{background:var(--lime);color:var(--ink)}               /* the most used tile */
+#adminModal #adminTabLecture.tab-btn.active{background:var(--ink);color:var(--lime)}
+.form-label{font-weight:700;color:var(--text2)}
+.form-input,.form-select{height:48px;padding:0 14px;border:1.5px solid var(--border);border-radius:14px;background:var(--surface);font-size:15px}
+textarea.form-input{height:auto;padding:12px 14px}
+.form-input:focus,.form-select:focus{border-color:var(--text)}
+.btn-add{min-height:52px;border-radius:26px;font-weight:800}
+.img-preview{border-radius:20px;background:var(--surface)}
+
+/* text that sits on an accent2 background must flip with the theme too */
+.reward-redeem-btn,.reward-pick-row.selected .reward-pick-check,.spin-btn,.unit-icon,
+[style*="background:var(--accent2)"],[style*="background: var(--accent2)"]{color:var(--on-accent)!important}
+
+/* ads paused (moderation mode): Rewards = Refer only */
+body.ads-paused .rw-seg,body.ads-paused .pf-access-row{display:none}

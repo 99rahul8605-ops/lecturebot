@@ -911,23 +911,45 @@ body.ready{transition:none}
     <i class="ti ti-home"></i>
     Home
   </button>
-  <button class="nav-tab" id="navAccess" onclick="switchNavTab('access')">
-    <i class="ti ti-key" style="position:relative"></i>
-    <span id="accessDot" class="access-dot locked" style="position:relative;display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--red);margin-left:4px;vertical-align:middle"></span>
-    Access
-  </button>
-  <button class="nav-tab" id="navRefer" onclick="switchNavTab('refer')">
-    <i class="ti ti-share"></i>
-    Refer
-  </button>
-  <button class="nav-tab" id="navEarn" onclick="switchNavTab('earn')">
-    <i class="ti ti-disc"></i>
-    Earn
-  </button>
   <button class="nav-tab" id="navStudy" onclick="switchNavTab('study')">
     <i class="ti ti-clock"></i>
     Study
   </button>
+  <button class="nav-tab" id="navRewards" onclick="switchNavTab('earn')">
+    <i class="ti ti-gift"></i>
+    <span id="accessDot" class="access-dot locked" style="position:relative;display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--red);margin-left:4px;vertical-align:middle"></span>
+    <span class="nav-label">Rewards</span>
+  </button>
+  <button class="nav-tab" id="navProfile" onclick="switchNavTab('profile')">
+    <i class="ti ti-user"></i>
+    Profile
+  </button>
+  <!-- Legacy tabs: kept (hidden) because switchNavTab() toggles them by id. Rewards covers all three. -->
+  <button class="nav-tab" id="navAccess" onclick="switchNavTab('access')" hidden><i class="ti ti-key"></i>Access</button>
+  <button class="nav-tab" id="navRefer" onclick="switchNavTab('refer')" hidden><i class="ti ti-share"></i>Refer</button>
+  <button class="nav-tab" id="navEarn" onclick="switchNavTab('earn')" hidden><i class="ti ti-disc"></i>Earn</button>
+</div>
+
+<!-- Profile Page (settings: theme, admin, support) -->
+<div class="page" id="page-profile">
+  <div class="page-header">
+    <div class="page-title"><i class="ti ti-user-circle" style="color:var(--accent)"></i> Profile</div>
+  </div>
+  <div class="page-body">
+    <div class="pf-wrap">
+      <div class="pf-card">
+        <div class="pf-av" id="pfAv">?</div>
+        <div class="pf-info"><div class="pf-name" id="pfName">Student</div><div class="pf-sub" id="pfSub"></div></div>
+      </div>
+      <div class="pf-list">
+        <div class="pf-row" id="pfThemeRow"><i class="ti ti-moon"></i><span>Light mode</span></div>
+        <div id="pfAdminSlot"></div>
+        <button class="pf-row pf-access-row" onclick="switchNavTab('access')"><i class="ti ti-key"></i><span>Access &amp; timer</span><i class="ti ti-chevron-right pf-arr"></i></button>
+        <button class="pf-row" onclick="openAnnouncements()"><i class="ti ti-bell"></i><span>Announcements</span><i class="ti ti-chevron-right pf-arr"></i></button>
+        <button class="pf-row" onclick="RewardsUI.contact()"><i class="ti ti-brand-telegram"></i><span>Contact support</span><i class="ti ti-chevron-right pf-arr"></i></button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Study Page (timer, plan, groups, stats) -->
@@ -2460,6 +2482,7 @@ function startAdBlockerMonitoring() {
 
 // Moderation preview: focus on actual educational content while ads are paused.
 function applyModerationUI() {
+  if (window.RewardsUI) RewardsUI.setAdsPaused(!!_adsPaused);
   if (!_adsPaused) return;
   ['navEarn', 'navAccess', 'adsFreeBadge', 'adsFreeBanner', 'homeTimerBar'].forEach(function(id) {
     var el = document.getElementById(id);
@@ -4437,6 +4460,7 @@ function switchNavTab(tab) {
   if (_adsPaused && (tab === 'earn' || tab === 'access')) tab = 'home';
   currentTab = tab;
   if (tab !== 'study' && window.Study) Study.leave();
+  if (window.RewardsUI) RewardsUI.onTab(tab);
   var _ns = document.getElementById('navStudy'); if (_ns) _ns.classList.toggle('active', tab === 'study');
   document.getElementById('navHome').classList.toggle('active', tab === 'home');
   document.getElementById('navAccess').classList.toggle('active', tab === 'access');
@@ -4472,6 +4496,20 @@ function switchNavTab(tab) {
     if (tg) tg.BackButton.hide();
     loadSpinStatus();
     if (!rewardsSummary) loadRewardsSummary(); else renderSpinStatusBar();
+    return;
+  }
+
+  if (tab === 'profile') {
+    document.querySelectorAll('.page').forEach(function(p) {
+      p.style.transition = 'none';
+      p.style.transform = 'translateX(100%)';
+      p.classList.remove('active');
+    });
+    var profEl = document.getElementById('page-profile');
+    profEl.style.transform = '';
+    profEl.classList.add('active');
+    if (tg) tg.BackButton.hide();
+    if (window.RewardsUI) RewardsUI.renderProfile();
     return;
   }
 
@@ -6195,5 +6233,6 @@ async function adminDeleteCoupon(id) {
 <script src="/lecture-picker.js"></script>
 <script src="/study.js"></script>
 <script src="/study-social.js"></script>
+<script src="/rewards-ui.js"></script>
 </body>
 </html>

@@ -2,8 +2,9 @@
 #page-study{--st-r:20px;--st-ink:#17150F;--st-lime:#D4F25C}
 #page-study .st-body{display:flex;flex-direction:column;gap:14px;padding-top:14px}
 #page-study i.ti{font-style:normal}
-#page-study button,.st-sheet button{font-family:inherit;cursor:pointer;color:inherit}
-#page-study input,.st-sheet input{font-family:inherit}
+/* :where() = zero specificity, so these defaults never beat a component's own colour (an #id selector would) */
+:where(#page-study) button,:where(.st-sheet) button{font-family:inherit;cursor:pointer;color:inherit}
+:where(#page-study) input,:where(.st-sheet) input{font-family:inherit}
 .st-streak{margin-left:auto;display:flex;align-items:center;gap:5px;font-size:13px;font-weight:800;color:var(--text)}
 .st-streak i{color:#FF7A45;font-size:18px}
 .st-muted{font-size:12px;font-weight:600;color:var(--text2)}
