@@ -1,5 +1,16 @@
 # EduBot update: Study tab, multi-select lectures, new backend
 
+## Update 4: the bot's video limits now apply to multi-select
+The bot allows at most **3 lecture videos in a chat at once** (a 4th deletes the oldest immediately; owner exempt) and
+**10 videos/day** (owner / admins with "bypass" exempt). Notes (documents) are not counted. Without handling this,
+selecting 10 lectures would have deleted 7 of them instantly and used up the daily quota.
+* Picker: the 4th lecture can't be selected ("Select first 3"), notes stay unlimited, owner is exempt.
+* `/api/lectures/send` checks before building anything: videos > 3 -> 400 `too_many_videos`; more than today's remaining
+  quota -> 400 `daily_limit`; and returns `replaces` (old videos in the chat that would be removed) so the app asks
+  "N purane lecture video hat jayenge. Continue?" before opening the bot. A bulk-batch lecture counts as all its videos.
+* `server.js` passes the real `MAX_ACTIVE_VIDEOS` / `DAILY_VIDEO_LIMIT` to the route (`courseRoutes.setLimits`) and
+  exposes them in `/api/config`, so changing the constants in one place updates everything.
+
 ## Update 3: lectures not reaching the bot / notes opening a URL
 Root cause: lecture and notes values are stored as a **bare code** (`RbZUHU`) or a legacy t.me link (the app's own
 `openLecLink()` handles both). The new multi-select only understood full `https://t.me/...` links, so bare codes were

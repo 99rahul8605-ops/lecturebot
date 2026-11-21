@@ -2061,6 +2061,18 @@ router.post('/coupons/validate', (req, res) => {
 // The bot's existing batch delivery (/start B…) then sends everything, keeping
 // its daily video limit, 6-hour auto-delete and ban checks untouched.
 const MULTI_SEND_MAX_ITEMS = 30;
+
+// The bot limits videos: at most N lecture videos may sit in a chat at once (the next one deletes the oldest
+// immediately) and D videos per day. server.js injects the real values + helpers via setLimits(); these are
+// only safe fallbacks. Notes (documents) are never counted.
+const _lim = {
+  maxActiveVideos: 3, dailyVideoLimit: 10,
+  getTodayIST: () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10),
+  isOwner: (id) => Number(id) === OWNER_ID,
+  bypassesDailyVideoLimit: (id) => Number(id) === OWNER_ID,
+};
+function setLimits(l) { Object.assign(_lim, l || {}); }
+const _isVideoRec = (f) => !!f && (f.file_type === 'video' || f.file_type === 'video_note');
 const _multiSendHits = new Map();   // userId -> [timestamps] (rate limit)
 
 // A stored lecture/notes link can be: a bare code ("RbZUHU", the current format), a full t.me deep link,
@@ -2135,9 +2147,34 @@ router.post('/lectures/send', async (req, res) => {
     if (skipped.length) console.warn('[lectures/send] user', userId, 'skipped:', JSON.stringify(skipped.slice(0, 10)));
     if (!files.length) return res.json({ link: null, count: 0, skipped, external });
 
+    // ── Bot video limits (sending more would just get the extras deleted / waste the daily quota) ──
+    const videos = files.filter(_isVideoRec).length;
+    const max = _lim.maxActiveVideos, owner = !!_lim.isOwner(userId);
+    if (videos && !owner && videos > max) {
+      return res.status(400).json({ code: 'too_many_videos', max, videos,
+        error: `Ek time pe max ${max} lecture videos aa sakte hain. Aapne ${videos} videos chune hain, kam karke dobara try karo.` });
+    }
+    let remaining = null;
+    if (videos && !_lim.bypassesDailyVideoLimit(userId)) {
+      const rec = db.dailyVideoLimit.find(Number(userId));
+      const used = rec && rec.resetDate === _lim.getTodayIST() ? rec.count : 0;
+      remaining = Math.max(0, _lim.dailyVideoLimit - used);
+      if (videos > remaining) {
+        return res.status(400).json({ code: 'daily_limit', remaining, videos,
+          error: remaining ? `Aaj sirf ${remaining} video bache hain (roz ${_lim.dailyVideoLimit}). Aapne ${videos} chune hain.`
+                           : `Aaj ki ${_lim.dailyVideoLimit} videos ki limit khatam ho gayi. Kal dobara try karo.` });
+      }
+    }
+    let replaces = 0;                         // how many videos already in the chat would be pushed out
+    if (videos && !owner) {
+      const active = new Set((db.pendingDelete.getByChatId(Number(userId)) || []).map((x) => x.message_id)).size;
+      replaces = Math.max(0, active + videos - max);
+    }
+
     const batchCode = 'BS' + crypto.randomBytes(7).toString('hex').toUpperCase();
     db.bulkBatch.create({ id: db.generateId(), batch_code: batchCode, user_id: 'ms_' + userId, files });
-    res.json({ link: `https://t.me/${_botUsername}?start=${batchCode}`, count: files.length, skipped, external });
+    res.json({ link: `https://t.me/${_botUsername}?start=${batchCode}`, count: files.length, videos, replaces, max,
+      remaining: remaining == null ? null : remaining - videos, skipped, external });
   } catch (e) {
     console.error('lectures/send error:', e.message);
     res.status(500).json({ error: 'Could not prepare your files' });
@@ -2157,6 +2194,7 @@ module.exports = router;
 module.exports.getPointsBreakdown = getPointsBreakdown;
 module.exports.POINTS_PER_REFERRAL = POINTS_PER_REFERRAL;
 module.exports.setBot = setBot;
+module.exports.setLimits = setLimits;
 module.exports.setGrantAdsFreeAccess = setGrantAdsFreeAccess;
 module.exports.setNotifyFreeAdsFreeGrant = setNotifyFreeAdsFreeGrant;
 module.exports.setBotCommandMenuSync = setBotCommandMenuSync;

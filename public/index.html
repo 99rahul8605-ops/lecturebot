@@ -2483,6 +2483,9 @@ async function checkAdminAccess() {
   try {
     var config = await (await fetch('/api/config')).json();
     if (config.botUsername) window._botUsername = config.botUsername;
+    window._maxActiveVideos = config.maxActiveVideos || 3;      // lecture videos allowed in the chat at once
+    window._dailyVideoLimit = config.dailyVideoLimit || 10;
+    try { var _u = Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user; window._isOwnerUser = !!(_u && config.ownerId && Number(_u.id) === Number(config.ownerId)); } catch (_) {}
     if (config.upiId) window._upiId = config.upiId;
     if (config.upiName) window._upiName = config.upiName;
     if (config.contactLink) window._contactLink = config.contactLink;

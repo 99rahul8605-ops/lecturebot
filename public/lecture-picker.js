@@ -16,6 +16,12 @@
     if (/^[A-Za-z0-9_-]{4,64}$/.test(v)) return true;
     return /^(https?:\/\/)?(www\.)?t(elegram)?\.me\//i.test(v);
   }
+  function askConfirm(msg) {
+    return new Promise(function (resolve) {
+      try { if (window.Telegram && Telegram.WebApp && Telegram.WebApp.showConfirm) return Telegram.WebApp.showConfirm(msg, resolve); } catch (_) {}
+      resolve(window.confirm(msg));
+    });
+  }
   function openExternal(url) {
     url = String(url).trim();
     if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
@@ -26,6 +32,9 @@
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function hasLecture(l) { return !l.comingSoon && !!l.link; }
   function hasNotes(l) { return !l.comingSoon && !!l.notes; }
+  // The bot keeps at most N lecture videos in a chat (the next one deletes the oldest) and N/day, so more than N
+  // lectures at once would just be thrown away. Notes are not limited. The owner is exempt (same as the bot).
+  function lecCap() { return window._isOwnerUser ? 30 : (window._maxActiveVideos || 3); }
   function selCount() { return Object.keys(P.sel.lecture).length + Object.keys(P.sel.notes).length; }
 
   // ── Two big buttons shown in place of the old row list ────────────────────
@@ -87,7 +96,9 @@
     document.getElementById('lpTitle').textContent = isLec ? 'Select lectures' : 'Select notes';
     var list = P.lectures.map(function (l, i) { return { l: l, n: i + 1 }; })
       .filter(function (x) { return isLec ? true : hasNotes(x.l); });
-    document.getElementById('lpSub').textContent = list.length + (isLec ? ' lectures' : ' notes') + ' \u00b7 tap to select';
+    document.getElementById('lpSub').textContent = list.length + (isLec ? ' lectures \u00b7 max ' + lecCap() + ' at a time' : ' notes') + ' \u00b7 tap to select';
+    var qb = document.querySelector('#lpSheet .lp-quick button');
+    if (qb) qb.textContent = isLec ? 'Select first ' + lecCap() : 'Select all';
     document.getElementById('lpGrid').innerHTML = list.map(function (x) {
       var l = x.l, id = l._id, key = isLec ? 'lecture' : 'notes';
       var cls = 'lp-card', icon = '', attrs = '';
@@ -124,12 +135,21 @@
       if (btn.getAttribute('data-lock')) { toast('Premium access required for this lecture', 'error'); return; }
       if (btn.getAttribute('data-ext')) { openExternal(l.notes); return; }
       var key = P.type === 'notes' ? 'notes' : 'lecture';
-      if (P.sel[key][id]) delete P.sel[key][id]; else P.sel[key][id] = true;
+      if (P.sel[key][id]) delete P.sel[key][id];
+      else {
+        if (key === 'lecture' && Object.keys(P.sel.lecture).length >= lecCap()) {
+          toast('Ek time pe max ' + lecCap() + ' lectures select ho sakte hain. Pehle koi hatao.', 'error');
+          try { Telegram.WebApp.HapticFeedback.notificationOccurred('warning'); } catch (_) {}
+          return;
+        }
+        P.sel[key][id] = true;
+      }
       renderSheet();
     },
     selectAll: function () {
       var key = P.type === 'notes' ? 'notes' : 'lecture';
       P.lectures.forEach(function (l) {
+        if (key === 'lecture' && Object.keys(P.sel.lecture).length >= lecCap()) return;      // stop at the cap
         if (key === 'lecture' ? hasLecture(l) : (hasNotes(l) && isBotRef(l.notes))) P.sel[key][l._id] = true;
       });
       renderSheet();
@@ -153,6 +173,7 @@
             : 'Could not send these. They may be locked or unavailable.';
           toast(why, 'error'); return;
         }
+        if (res.replaces > 0 && !(await askConfirm('Aapke chat ke ' + res.replaces + ' purane lecture video hat jayenge (ek time pe max ' + (res.max || lecCap()) + ' videos). Continue?'))) return;
         var skip = {}; (res.skipped || []).forEach(function (s) { skip[s.lectureId + ':' + s.type] = true; });
         items.forEach(function (it) { if (it.type === 'lecture' && !skip[it.lectureId + ':lecture'] && typeof markLectureWatched === 'function') markLectureWatched(it.lectureId); });
         if ((res.skipped || []).length) toast((res.skipped.length) + ' item(s) skipped (locked or unavailable)', 'error');
