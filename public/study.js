@@ -68,6 +68,7 @@
   S.go = function (tab, arg) {
     S.stopPolls(); S.closeSheet();
     S.tab = tab; S.arg = arg;
+    document.body.classList.toggle('st-chat-mode', tab === 'group' && !!arg && arg.view === 'chat');   // messenger layout
     var btns = document.querySelectorAll('#stSeg button');
     for (var i = 0; i < btns.length; i++) btns[i].classList.toggle('on', btns[i].getAttribute('data-tab') === (tab === 'room' || tab === 'group' || tab === 'manage' ? 'groups' : tab));
     var map = { timer: renderTimer, plan: renderPlan, stats: renderStats };
@@ -86,7 +87,7 @@
     $('stStreak').innerHTML = S.me.streak ? '<i class="ti ti-flame"></i>' + S.me.streak + ' day' + (S.me.streak > 1 ? 's' : '') : '';
     S.go(S.tab === 'group' || S.tab === 'manage' || S.tab === 'room' ? 'groups' : S.tab || 'timer');
   };
-  S.leave = function () { S.stopPolls(); S.closeSheet(); };   // the timer keeps running in the background
+  S.leave = function () { S.stopPolls(); S.closeSheet(); document.body.classList.remove('st-chat-mode'); };   // the timer keeps running in the background
   S.reloadMe = async function () {
     S.me = await S.api('/me');
     $('stStreak').innerHTML = S.me.streak ? '<i class="ti ti-flame"></i>' + S.me.streak + ' day' + (S.me.streak > 1 ? 's' : '') : '';

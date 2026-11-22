@@ -1,5 +1,17 @@
 # EduBot update: Study tab, multi-select lectures, new backend
 
+## Update 7: chat layout, reply, support button
+* **Messenger layout for group chat:** header + messages fill the screen and the write box is pinned to the bottom
+  (it used to float in the middle). The page title and main tabs are hidden in chat to save room.
+* **Keyboard:** while any text field is focused (`body.kb-open`, set app-wide by `rewards-ui.js`) the bottom dock is hidden,
+  so it no longer rides up above the keyboard. Send no longer steals focus, so the keyboard stays open between messages.
+* **Reply:** swipe a message sideways (either direction, 56px) or tap it and choose Reply. The reply bar shows above the box;
+  the sent message shows a quote (tap it to jump to the original). Backend: `POST /groups/:id/messages` accepts `replyTo`
+  (same-group, non-deleted, non-system messages only) and stores a snapshot of author + first 100 chars.
+* **Tag:** tap a sender's name to insert `@Name`; `@tags` are highlighted.
+* **Floating support (💬) button** is hidden on the Study and Profile tabs (Profile has "Contact support"). To remove it
+  everywhere, delete the `#contactBtn` block in `index.html`.
+
 ## Update 6: remaining pages (new look applied everywhere)
 * **Bottom nav** is now Home | Study | Rewards | Profile. Rewards = the old Access / Refer / Earn pages behind one tab with a
   segmented switch at the top of each (pages + logic unchanged; the old three nav buttons stay in the DOM, hidden, because

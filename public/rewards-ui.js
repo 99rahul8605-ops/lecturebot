@@ -37,6 +37,7 @@
 
   // Called from switchNavTab(): highlight the right dock tab
   R.onTab = function (tab) {
+    document.body.classList.toggle('no-fab', tab === 'study' || tab === 'profile');      // floating support button is in the way there
     var nr = $('navRewards'), np = $('navProfile');
     if (nr) nr.classList.toggle('active', TABS.indexOf(tab) >= 0);
     if (np) np.classList.toggle('active', tab === 'profile');
@@ -67,6 +68,16 @@
     if (nr) nr.setAttribute('onclick', "switchNavTab('" + (paused ? 'refer' : 'earn') + "')");
     var label = nr && nr.querySelector('.nav-label'); if (label) label.textContent = paused ? 'Refer' : 'Rewards';
   };
+
+  // While a text field is focused the on-screen keyboard shrinks the viewport and the fixed bottom dock would
+  // float above the keyboard. Hide the dock while typing, on every page.
+  var TEXTY = /^(text|search|email|url|tel|number|password|)$/i;
+  function isTextField(el) { return !!el && ((el.tagName === 'INPUT' && TEXTY.test(el.type || '')) || el.tagName === 'TEXTAREA'); }
+  document.addEventListener('focusin', function (e) { if (isTextField(e.target)) document.body.classList.add('kb-open'); });
+  document.addEventListener('focusout', function (e) {
+    if (!isTextField(e.target)) return;
+    setTimeout(function () { if (!isTextField(document.activeElement)) document.body.classList.remove('kb-open'); }, 150);
+  });
 
   function init() { injectSegments(); moveNodes(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();

@@ -94,6 +94,12 @@ const StudyMessage = getModel("StudyMessage", new Schema({
   name: { type: String, default: "" },
   text: { type: String, required: true, maxlength: 500 },
   kind: { type: String, enum: ["text", "system"], default: "text" },
+  // Reply: a snapshot (name + first 100 chars) of the message being answered, so it still shows if that one is deleted
+  reply: {
+    id: { type: Schema.Types.ObjectId, default: null },
+    name: { type: String, default: "" },
+    text: { type: String, default: "", maxlength: 100 },
+  },
   deleted: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now, expires: 60 * 60 * 24 * 30 },
 }), [[{ groupId: 1, _id: 1 }]]);

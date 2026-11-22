@@ -694,6 +694,7 @@ const lastPost = new Map();     // `${groupId}:${uid}` -> ms
 const msgView = (m, g, uid) => ({
   id: String(m._id), kind: m.kind, mine: m.userId === uid, userId: m.userId, name: m.name,
   role: m.kind === "system" ? null : roleOf(g, m.userId), text: m.deleted ? "" : m.text, deleted: !!m.deleted, at: m.createdAt,
+  reply: m.reply && m.reply.id && !m.deleted ? { id: String(m.reply.id), name: m.reply.name || "", text: m.reply.text || "" } : null,
 });
 
 router.get("/groups/:id/messages", auth, wrap(async (req, res) => {
@@ -729,7 +730,14 @@ router.post("/groups/:id/messages", auth, wrap(async (req, res) => {
   lastPost.set(key, now);
   if (lastPost.size > 5000) for (const [k, t] of lastPost) if (now - t > 600000) lastPost.delete(k);
   const prof = await ensureProfile(req.uid, req.tgName);
-  const m = await StudyMessage.create({ groupId: g._id, userId: req.uid, name: realName(prof), text });
+  // Optional reply: only to a normal, not-deleted message of THIS group (anything else is quietly ignored)
+  let reply;
+  const rid = req.body && req.body.replyTo;
+  if (rid && isId(rid)) {
+    const target = await StudyMessage.findOne({ _id: rid, groupId: g._id });
+    if (target && target.kind === "text" && !target.deleted) reply = { id: target._id, name: target.name || "", text: String(target.text).slice(0, 100) };
+  }
+  const m = await StudyMessage.create({ groupId: g._id, userId: req.uid, name: realName(prof), text, ...(reply ? { reply } : {}) });
   res.json({ message: msgView(m.toObject(), g, req.uid) });
 }));
 

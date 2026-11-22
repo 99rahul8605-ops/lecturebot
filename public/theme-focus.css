@@ -172,3 +172,6 @@ textarea.form-input{height:auto;padding:12px 14px}
 
 /* ads paused (moderation mode): Rewards = Refer only */
 body.ads-paused .rw-seg,body.ads-paused .pf-access-row{display:none}
+
+/* hide the floating support button where it covers the Study chat / timers (Profile has "Contact support") */
+body.no-fab #contactBtn{display:none!important}

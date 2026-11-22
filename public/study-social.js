@@ -132,7 +132,7 @@
 
   // ═════════════════════════ GROUP (timers + chat) ═════════════════════════
   function header(g, isMod) {
-    return '<div class="st-row">' + back('backGroups') + '<span class="st-gic" style="background:' + esc(g.color) + ';color:#17150F;width:40px;height:40px;font-size:14px">' + esc(g.name.slice(0, 2).toUpperCase()) + '</span>' +
+    return '<div class="st-row st-ghead">' + back('backGroups') + '<span class="st-gic" style="background:' + esc(g.color) + ';color:#17150F;width:40px;height:40px;font-size:14px">' + esc(g.name.slice(0, 2).toUpperCase()) + '</span>' +
       '<div class="st-grow"><h2 class="st-h2" style="margin:0">' + esc(g.name) + '</h2><div class="st-muted" id="gSub"></div></div>' +
       '<button class="st-back" data-act="invite" aria-label="Invite"><i class="ti ti-user-plus"></i></button>' +
       (isMod ? '<button class="st-back" data-act="manage" aria-label="Manage group"><i class="ti ti-settings"></i></button>' : '') + '</div>';
@@ -149,7 +149,7 @@
       var isMod = G.role === 'admin' || G.role === 'coadmin';
       if (first) {
         body().innerHTML = header(d.group, isMod) +
-          '<div class="st-seg st-seg-sm"><button data-act="gView" data-v="timers" class="' + (G.view === 'timers' ? 'on' : '') + '">Timers</button><button data-act="gView" data-v="chat" class="' + (G.view === 'chat' ? 'on' : '') + '">Chat</button></div><div id="gBody"></div>';
+          '<div class="st-seg st-seg-sm st-gseg"><button data-act="gView" data-v="timers" class="' + (G.view === 'timers' ? 'on' : '') + '">Timers</button><button data-act="gView" data-v="chat" class="' + (G.view === 'chat' ? 'on' : '') + '">Chat</button></div><div id="gBody"></div>';
         if (G.view === 'chat') startChat(); else { S.poll(function () { if (G.view === 'timers') loadGroup(false); }, 8000); startTimerTick(); }
       }
       $('gSub').textContent = d.group.memberCount + ' members \u00b7 ' + d.liveCount + ' live';
@@ -178,8 +178,9 @@
 
   // ── chat ──
   function startChat() {
-    $('gBody').innerHTML = '<div id="gPin"></div><div class="st-chat" id="gChat"></div><div class="st-compose" id="gCompose"></div>';
-    G.cursor = null; G.msgs = []; G.fail = 0; composeKey = null; busy = false;
+    $('gBody').innerHTML = '<div id="gPin"></div><div class="st-chat" id="gChat"></div>' +
+      '<div class="st-compose" id="gCompose"><div id="gReplyBar"></div><div class="st-crow" id="gCRow"></div></div>';
+    G.cursor = null; G.msgs = []; G.fail = 0; G.replyTo = null; composeKey = null; busy = false;
     S.poll(loadMsgs, 4000);
     S.polls.push(setInterval(function () { if (G.view === 'chat') loadGroupMetaQuiet(); }, 20000));
   }
@@ -199,9 +200,11 @@
       else if (first) paintChat();
       if ($('gPin')) $('gPin').innerHTML = d.pinned ? '<div class="st-pinned"><i class="ti ti-pin"></i><span>' + esc(d.pinned.text) + '</span></div>' : '';
       // The input box is only rebuilt when the "can I write?" state changes, so typing is never wiped by a poll.
-      var key = d.canPost ? 'ok' : (d.mutedUntil ? 'muted' : 'admins'), c = $('gCompose');
+      G.canPost = d.canPost;
+      var key = d.canPost ? 'ok' : (d.mutedUntil ? 'muted' : 'admins'), c = $('gCRow');
       if (c && key !== composeKey) {
         composeKey = key;
+        if (!d.canPost) { G.replyTo = null; paintReplyBar(); }
         c.innerHTML = d.canPost
           ? '<input id="gMsg" maxlength="500" placeholder="Write a message\u2026" aria-label="Message" enterkeyhint="send" autocomplete="off"><button data-act="sendMsg" aria-label="Send"><i class="ti ti-send"></i></button>'
           : '<div class="st-muted st-center" style="width:100%">' + (d.mutedUntil ? 'You are muted in this group for now.' : 'Only admins can chat right now.') + '</div>';
@@ -213,19 +216,90 @@
     } finally { busy = false; }
   }
   async function refreshMsgs() { for (var i = 0; i < 12 && busy; i++) await sleep(150); await loadMsgs(); }
+  function fmtText(t) {                                   // escape, keep line breaks, highlight @tags
+    return esc(t).replace(/\n/g, '<br>').replace(/(^|[\s>])(@[^\s@<]{1,30})/g, '$1<span class="st-at">$2</span>');
+  }
   function paintChat() {
     $('gChat').innerHTML = G.msgs.map(function (m) {
       if (m.kind === 'system') return '<div class="st-sys">' + esc(m.text) + '</div>';
-      var canAct = !m.deleted && (m.mine || G.role === 'admin' || G.role === 'coadmin');
-      return '<div class="st-msg ' + (m.mine ? 'mine' : '') + '"><div class="st-bub' + (m.deleted ? ' del' : '') + '"' + (canAct ? ' data-act="msgMenu" data-id="' + m.id + '"' : '') + '>' +
-        (m.mine ? '' : '<div class="st-bn">' + esc(m.name) + role(m.role) + '</div>') + (m.deleted ? '<i>message deleted</i>' : esc(m.text).replace(/\n/g, '<br>')) + '</div></div>';
+      var q = m.reply ? '<div class="st-rq" data-act="jumpMsg" data-id="' + esc(m.reply.id) + '"><b>' + esc(m.reply.name || 'Message') + '</b><span>' + esc(m.reply.text || 'Message') + '</span></div>' : '';
+      var nm = m.mine ? '' : '<div class="st-bn"><span data-act="tagUser" data-n="' + esc(m.name) + '">' + esc(m.name) + '</span>' + role(m.role) + '</div>';
+      return '<div class="st-msg ' + (m.mine ? 'mine' : '') + '" data-mid="' + esc(m.id) + '"><div class="st-bub' + (m.deleted ? ' del' : '') + '"' + (m.deleted ? '' : ' data-act="msgMenu" data-id="' + esc(m.id) + '"') + '>' +
+        nm + q + (m.deleted ? '<i>message deleted</i>' : fmtText(m.text)) + '</div></div>';
     }).join('') || '<div class="st-empty">No messages yet. Say hello!</div>';
   }
+
+  // ── reply (swipe a message, or tap it and choose Reply) ──
+  function msgById(id) { return G.msgs.filter(function (x) { return x.id === id; })[0]; }
+  function paintReplyBar() {
+    var bar = $('gReplyBar'); if (!bar) return;
+    var r = G.replyTo;
+    bar.innerHTML = r ? '<div class="st-replybar"><i class="ti ti-arrow-back-up"></i><div class="st-rb-t"><b>' + esc(r.name) + '</b><span>' + esc(r.text.slice(0, 80)) + '</span></div>' +
+      '<button data-act="cancelReply" aria-label="Cancel reply"><i class="ti ti-x"></i></button></div>' : '';
+  }
+  function setReply(m) {
+    if (!m || m.deleted || m.kind === 'system' || !$('gMsg')) return;
+    G.replyTo = { id: m.id, name: m.mine ? 'You' : m.name, text: m.text };
+    paintReplyBar(); S.haptic('light');
+    var i = $('gMsg'); if (i) i.focus();
+  }
+  ACT.cancelReply = function () { G.replyTo = null; paintReplyBar(); };
+  ACT.replyMsg = function (el) { S.closeSheet(); setReply(msgById(el.getAttribute('data-id'))); };
+  ACT.tagUser = function (el) {                           // tap a name to @tag them
+    var i = $('gMsg'); if (!i) return;
+    var first = String(el.getAttribute('data-n') || '').trim().split(/\s+/)[0];
+    if (first) { i.value = (i.value && !/\s$/.test(i.value) ? i.value + ' ' : i.value) + '@' + first + ' '; i.focus(); }
+  };
+  ACT.jumpMsg = function (el) {
+    var id = el.getAttribute('data-id'), box = $('gChat'); if (!box) return;
+    var node = box.querySelector('.st-msg[data-mid="' + id + '"]');
+    if (!node) { S.say('Original message is too old to show here'); return; }
+    node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    node.classList.add('flash'); setTimeout(function () { node.classList.remove('flash'); }, 1300);
+  };
+
+  // swipe a bubble sideways (either way) to reply
+  var SWIPE_AT = 56, sw = null, swipedAt = 0;
+  document.addEventListener('touchstart', function (e) {
+    var bub = e.target && e.target.closest && e.target.closest('#gChat .st-bub');
+    if (!bub || bub.classList.contains('del') || !e.touches || !e.touches[0]) { sw = null; return; }
+    sw = { el: bub, x: e.touches[0].clientX, y: e.touches[0].clientY, dx: 0, active: false, buzzed: false };
+  }, { passive: true });
+  document.addEventListener('touchmove', function (e) {
+    if (!sw || !e.touches || !e.touches[0]) return;
+    var dx = e.touches[0].clientX - sw.x, dy = e.touches[0].clientY - sw.y;
+    if (!sw.active) {
+      if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) { sw = null; return; }              // it is a scroll, not a swipe
+      if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.4) { sw.active = true; sw.el.classList.add('swiping'); } else return;
+    }
+    sw.dx = dx;
+    sw.el.style.transform = 'translateX(' + Math.max(-72, Math.min(72, dx * 0.7)) + 'px)';
+    var ready = Math.abs(dx) >= SWIPE_AT;
+    sw.el.parentNode.classList.toggle('swipe-ready', ready);
+    if (ready && !sw.buzzed) { sw.buzzed = true; S.haptic('light'); }
+  }, { passive: true });
+  function endSwipe(cancel) {
+    if (!sw) return; var s2 = sw; sw = null;
+    s2.el.style.transform = ''; s2.el.classList.remove('swiping'); s2.el.parentNode.classList.remove('swipe-ready');
+    if (s2.active) swipedAt = Date.now();                  // so the tap-menu does not also open
+    if (!cancel && s2.active && Math.abs(s2.dx) >= SWIPE_AT) setReply(msgById(s2.el.getAttribute('data-id')));
+  }
+  document.addEventListener('touchend', function () { endSwipe(false); });
+  document.addEventListener('touchcancel', function () { endSwipe(true); });
+
+  // keyboard open: keep the chat in view (the dock is hidden app-wide by rewards-ui.js while typing)
+  document.addEventListener('focusin', function (e) {
+    if (e.target && e.target.id === 'gMsg') setTimeout(function () { var b = $('gChat'); if (b) b.scrollTop = b.scrollHeight; }, 320);
+  });
+  // tapping Send must not steal focus, otherwise the keyboard closes after every message
+  document.addEventListener('mousedown', function (e) { if (e.target && e.target.closest && e.target.closest('.st-crow button')) e.preventDefault(); });
+
   ACT.sendMsg = async function () {
     var inp = $('gMsg'); if (!inp || inp.getAttribute('data-sending')) return;
     var text = inp.value.trim(); if (!text) return;
     inp.setAttribute('data-sending', '1'); inp.value = '';
-    try { await S.api('/groups/' + G.id + '/messages', 'POST', { text: text }); await refreshMsgs(); scrollPageBottom(); }
+    var rid = G.replyTo && G.replyTo.id;
+    try { await S.api('/groups/' + G.id + '/messages', 'POST', rid ? { text: text, replyTo: rid } : { text: text }); G.replyTo = null; paintReplyBar(); await refreshMsgs(); var cb = $('gChat'); if (cb) cb.scrollTop = cb.scrollHeight; }
     catch (e) { var i2 = $('gMsg'); if (i2 && !i2.value) i2.value = text; S.say(S.err(e), 'error'); }
     finally { var i3 = $('gMsg'); if (i3) { i3.removeAttribute('data-sending'); i3.focus(); } }
   };
@@ -233,12 +307,14 @@
 
   function canModerate(targetRole) { return RANK[G.role] > RANK[targetRole || 'member'] && (G.role === 'admin' || G.role === 'coadmin'); }
   ACT.msgMenu = function (el) {
-    var m = G.msgs.filter(function (x) { return x.id === el.getAttribute('data-id'); })[0]; if (!m) return;
+    if (Date.now() - swipedAt < 450) return;               // that was the end of a swipe, not a tap
+    var m = msgById(el.getAttribute('data-id')); if (!m) return;
     var isMod = G.role === 'admin' || G.role === 'coadmin', can = !m.mine && canModerate(m.role) && m.userId !== 'system';
     S.sheet('<div class="st-quote">' + esc(m.text.slice(0, 120)) + '</div><div class="st-list">' +
+      (G.canPost === false ? '' : '<button class="st-opt" data-act="replyMsg" data-id="' + m.id + '"><i class="ti ti-arrow-back-up"></i><span>Reply</span></button>') +
       (isMod ? '<button class="st-opt" data-act="pinMsg" data-id="' + m.id + '"><i class="ti ti-pin"></i><span>Pin message</span></button>' : '') +
       (can ? '<button class="st-opt" data-act="muteUser" data-u="' + m.userId + '" data-min="60"><i class="ti ti-volume-off"></i><span>Mute ' + esc(m.name) + ' for 1 hour</span></button>' : '') +
-      '<button class="st-opt st-bad" data-act="delMsg" data-id="' + m.id + '"><i class="ti ti-trash"></i><span>Delete message</span></button></div>');
+      (m.mine || isMod ? '<button class="st-opt st-bad" data-act="delMsg" data-id="' + m.id + '"><i class="ti ti-trash"></i><span>Delete message</span></button>' : '') + '</div>');
   };
   ACT.pinMsg = async function (el) { try { await S.api('/groups/' + G.id + '/pin', 'POST', { messageId: el.getAttribute('data-id') }); S.closeSheet(); loadMsgs(); S.say('Pinned'); } catch (e) { S.say(S.err(e), 'error'); } };
   ACT.delMsg = async function (el) {
