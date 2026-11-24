@@ -187,7 +187,7 @@ body.kb-open.st-chat-mode .st-gseg{display:none}
 .st-replybar button{width:40px;height:40px;border:0;border-radius:50%;background:transparent;color:var(--text2);font-size:18px;flex-shrink:0}
 
 /* ══ Timer tab = dark focus mode (design): same components, dark tokens scoped to the page ══ */
-#page-study.st-dark{--bg:#17150F;--surface:#25221B;--surface2:#25221B;--surface3:#25221B;--text:#F4F1EA;--text2:#A8A196;--text3:#6B665B;--border:#2B2820;--accent:#D4F25C;--on-accent:#17150F}
-#page-study.st-dark .st-ring-bg{stroke:#2B2820}
-#page-study.st-dark .st-seg button.on{background:#D4F25C;color:#17150F}
+#page-study.st-timer-dark{--bg:#17150F;--surface:#25221B;--surface2:#25221B;--surface3:#25221B;--text:#F4F1EA;--text2:#A8A196;--text3:#6B665B;--border:#2B2820;--accent:#D4F25C;--on-accent:#17150F}
+#page-study.st-timer-dark .st-ring-bg{stroke:#2B2820}
+#page-study.st-timer-dark .st-seg button.on{background:#D4F25C;color:#17150F}
 body.st-focus .bottom-nav{background:#25221B}

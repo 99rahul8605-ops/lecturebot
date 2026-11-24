@@ -1,5 +1,12 @@
 # EduBot update: Study tab, multi-select lectures, new backend
 
+## Update 9: Study > Timer layout broken (page turned into a row)
+The dark Timer mode used the page class `st-dark`, which already existed in `study.css` as the *dark card* component
+(`flex-direction:row; background:ink ...`). It matched `#page-study` and turned the whole page into a row: the header
+sat on the left and the content was pushed off the right edge. Renamed the page class to `st-timer-dark`
+(the card component keeps `.st-dark`). A CSS audit now confirms that none of the state classes added to body / pages
+match an unrelated component rule.
+
 ## Update 8: pages now follow the design boards (not just the colours)
 The earlier "Focus" theme only re-coloured the old layout. These pages were rebuilt to match the design file:
 * **Home** (`home-ui.js`, `home-ui.css`): header (profile · Namaste · streak chip · bell), headline "Aaj kya padhna hai, CA Inter?",

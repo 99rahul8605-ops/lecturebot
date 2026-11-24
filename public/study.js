@@ -69,7 +69,7 @@
     S.stopPolls(); S.closeSheet();
     S.tab = tab; S.arg = arg;
     document.body.classList.toggle('st-chat-mode', tab === 'group' && !!arg && arg.view === 'chat');   // messenger layout
-    var pg = $('page-study'); if (pg) pg.classList.toggle('st-dark', tab === 'timer');                    // Timer = dark focus mode (design)
+    var pg = $('page-study'); if (pg) pg.classList.toggle('st-timer-dark', tab === 'timer');                    // Timer = dark focus mode (design)
     document.body.classList.toggle('st-focus', tab === 'timer');
     var btns = document.querySelectorAll('#stSeg button');
     for (var i = 0; i < btns.length; i++) btns[i].classList.toggle('on', btns[i].getAttribute('data-tab') === (tab === 'room' || tab === 'group' || tab === 'manage' ? 'groups' : tab));
@@ -89,7 +89,7 @@
     $('stStreak').innerHTML = S.me.streak ? '<i class="ti ti-flame"></i>' + S.me.streak + ' day' + (S.me.streak > 1 ? 's' : '') : '';
     S.go(S.tab === 'group' || S.tab === 'manage' || S.tab === 'room' ? 'groups' : S.tab || 'timer');
   };
-  S.leave = function () { S.stopPolls(); S.closeSheet(); document.body.classList.remove('st-chat-mode', 'st-focus'); var pg = $('page-study'); if (pg) pg.classList.remove('st-dark'); };   // the timer keeps running in the background
+  S.leave = function () { S.stopPolls(); S.closeSheet(); document.body.classList.remove('st-chat-mode', 'st-focus'); var pg = $('page-study'); if (pg) pg.classList.remove('st-timer-dark'); };   // the timer keeps running in the background
   S.reloadMe = async function () {
     S.me = await S.api('/me');
     $('stStreak').innerHTML = S.me.streak ? '<i class="ti ti-flame"></i>' + S.me.streak + ' day' + (S.me.streak > 1 ? 's' : '') : '';
