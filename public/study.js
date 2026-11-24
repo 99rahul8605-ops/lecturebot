@@ -69,6 +69,8 @@
     S.stopPolls(); S.closeSheet();
     S.tab = tab; S.arg = arg;
     document.body.classList.toggle('st-chat-mode', tab === 'group' && !!arg && arg.view === 'chat');   // messenger layout
+    var pg = $('page-study'); if (pg) pg.classList.toggle('st-dark', tab === 'timer');                    // Timer = dark focus mode (design)
+    document.body.classList.toggle('st-focus', tab === 'timer');
     var btns = document.querySelectorAll('#stSeg button');
     for (var i = 0; i < btns.length; i++) btns[i].classList.toggle('on', btns[i].getAttribute('data-tab') === (tab === 'room' || tab === 'group' || tab === 'manage' ? 'groups' : tab));
     var map = { timer: renderTimer, plan: renderPlan, stats: renderStats };
@@ -87,7 +89,7 @@
     $('stStreak').innerHTML = S.me.streak ? '<i class="ti ti-flame"></i>' + S.me.streak + ' day' + (S.me.streak > 1 ? 's' : '') : '';
     S.go(S.tab === 'group' || S.tab === 'manage' || S.tab === 'room' ? 'groups' : S.tab || 'timer');
   };
-  S.leave = function () { S.stopPolls(); S.closeSheet(); document.body.classList.remove('st-chat-mode'); };   // the timer keeps running in the background
+  S.leave = function () { S.stopPolls(); S.closeSheet(); document.body.classList.remove('st-chat-mode', 'st-focus'); var pg = $('page-study'); if (pg) pg.classList.remove('st-dark'); };   // the timer keeps running in the background
   S.reloadMe = async function () {
     S.me = await S.api('/me');
     $('stStreak').innerHTML = S.me.streak ? '<i class="ti ti-flame"></i>' + S.me.streak + ' day' + (S.me.streak > 1 ? 's' : '') : '';
@@ -443,10 +445,15 @@
     try {
       var me = await S.api('/me'); S.me = me;
       var tgt = me.profile.dailyTargetMin * 60, done = me.summary.totalSec, pct = Math.min(100, Math.round(done / tgt * 100));
-      el.innerHTML = '<div class="hs-ring"><svg viewBox="0 0 96 96"><circle class="bg" cx="48" cy="48" r="40"/><circle class="fg" cx="48" cy="48" r="40" stroke-dasharray="251" stroke-dashoffset="' + (251 * (1 - pct / 100)) + '" transform="rotate(-90 48 48)"/></svg><b>' + pct + '%</b></div>' +
-        '<div class="hs-txt"><div class="hs-eyebrow">TODAY\'S STUDY</div><div class="hs-big">' + S.dur(done) + '</div><div class="hs-sub">of ' + S.dur(tgt) + ' target' + (me.streak ? ' \u00b7 ' + me.streak + ' day streak' : '') + '</div></div>' +
-        '<button class="hs-btn" aria-label="Open Study">' + (T.phase !== 'idle' ? 'Running' : 'Study') + '</button>';
+      var ci = window.HomeUI && HomeUI.continueInfo ? HomeUI.continueInfo() : null;
+      el.innerHTML =
+        '<div class="hm-goal-l"><div class="hm-eyebrow">Today\'s goal</div>' +
+        '<div class="hm-goal-t">' + esc(ci ? ci.title : 'Pick a lecture to start') + '</div>' +
+        '<button class="hm-goal-btn" onclick="HomeUI.goContinue(event)"><i class="ti ti-player-play-filled"></i>' + (ci ? 'Open lecture' : 'Start studying') + '</button></div>' +
+        '<div class="hm-ring"><svg viewBox="0 0 96 96" aria-hidden="true"><circle class="bg" cx="48" cy="48" r="40"/><circle class="fg" cx="48" cy="48" r="40" stroke-dasharray="251" stroke-dashoffset="' + (251 * (1 - pct / 100)) + '" transform="rotate(-90 48 48)"/></svg>' +
+        '<div class="hm-ring-in"><b>' + pct + '%</b><small>' + S.dur(done) + ' / ' + S.dur(tgt) + '</small></div></div>';
       el.style.display = 'flex';
+      var st = $('hmStreakTxt'); if (st) st.textContent = me.streak ? me.streak + ' day streak' : 'Start a streak';
     } catch (_) { el.style.display = 'none'; }                 // not logged in yet / offline: just hide the card
   };
   (function bootHome() { var n = 0; (function t() { if (tg && tg.initData) S.homeCard(); else if (n++ < 12) setTimeout(t, 500); })(); })();

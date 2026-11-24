@@ -118,7 +118,9 @@
     var cnt = document.getElementById('lpCount'), btn = document.getElementById('lpSend');
     cnt.innerHTML = n ? '<b>' + n + ' selected</b><small>' + nl + ' lectures \u00b7 ' + nn + ' notes</small>' : '<small>Nothing selected yet</small>';
     btn.disabled = !n || P.sending;
-    btn.querySelector('span').textContent = P.sending ? 'Preparing\u2026' : (n ? 'Send ' + n + ' to bot' : 'Send to bot');
+    var label = 'Send to bot';
+    if (n) label = 'Send ' + n + ' ' + (nn === 0 ? (n === 1 ? 'lecture' : 'lectures') : nl === 0 ? (n === 1 ? 'note' : 'notes') : (n === 1 ? 'item' : 'items')) + ' to bot';
+    btn.querySelector('span').textContent = P.sending ? 'Preparing\u2026' : label;
   }
 
   var API = {

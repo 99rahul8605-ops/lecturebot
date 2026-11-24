@@ -38,9 +38,18 @@
   // Called from switchNavTab(): highlight the right dock tab
   R.onTab = function (tab) {
     document.body.classList.toggle('no-fab', tab === 'study' || tab === 'profile');      // floating support button is in the way there
+    if (tab === 'earn') R.fillRef();
     var nr = $('navRewards'), np = $('navProfile');
     if (nr) nr.classList.toggle('active', TABS.indexOf(tab) >= 0);
     if (np) np.classList.toggle('active', tab === 'profile');
+  };
+
+  // Spin & Earn shows a short referral code (the last part of the invite link) with a Copy button
+  R.fillRef = function () {
+    var box = $('rwRefCode'); if (!box) return;
+    var link = (typeof getReferLink === 'function') ? getReferLink() : '';
+    if (link) window._referLink = link;                                      // copyReferLink() reads this
+    box.textContent = link ? (link.split('start=')[1] || link) : 'Open via Telegram';
   };
 
   R.renderProfile = function () {

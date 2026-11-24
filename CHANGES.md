@@ -1,5 +1,23 @@
 # EduBot update: Study tab, multi-select lectures, new backend
 
+## Update 8: pages now follow the design boards (not just the colours)
+The earlier "Focus" theme only re-coloured the old layout. These pages were rebuilt to match the design file:
+* **Home** (`home-ui.js`, `home-ui.css`): header (profile · Namaste · streak chip · bell), headline "Aaj kya padhna hai, CA Inter?",
+  "Today's goal" card (ring = % of today's study target; title + "Open lecture" = the chapter you opened last),
+  search icon + chips (All / Free / Premium / Saved), bento batch tiles (1 big + 2 small, alternating), lime "Spin & earn" strip with
+  the live access timer. Every old batch feature is kept inside the tiles: save (heart), lock, Buy, Free Redeem, View Demo,
+  reward-access timer, draft badge, % done. Old Home ids are kept (hidden) so no old code breaks.
+* **Chapters page:** small label above a big title, dark progress card (% · "X of Y lectures"), 01/02 pastel number tiles.
+  Same header style on Subjects / Units / Lectures pages.
+* **Lectures / Notes popup:** big dark "Lectures" and mint "Notes" cards, design card states, one full-width button
+  "Send 3 lectures to bot" (label follows what you picked).
+* **Spin & Earn:** header with label + access timer pill, "Watch an ad" row, "Dost ko invite karo" card (code + Copy).
+* **Admin panel:** dashboard first (big Add Lecture tile, 2x2 Batch/Subject/Chapter/Unit, Manage rows), a tile opens the
+  original form with a back arrow. Tiles the admin has no permission for are not shown. Old tabs stay in the DOM.
+* **Study > Timer** is dark focus mode like the design.
+Intentional differences from the boards: a heart (save) on tiles, a "Saved" chip, no batch cover image on tiles,
+the dock is Home / Study / Rewards / Profile (the app has no Library page).
+
 ## Update 7: chat layout, reply, support button
 * **Messenger layout for group chat:** header + messages fill the screen and the write box is pinned to the bottom
   (it used to float in the middle). The page title and main tabs are hidden in chat to save room.

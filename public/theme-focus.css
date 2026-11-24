@@ -175,3 +175,67 @@ body.ads-paused .rw-seg,body.ads-paused .pf-access-row{display:none}
 
 /* hide the floating support button where it covers the Study chat / timers (Profile has "Contact support") */
 body.no-fab #contactBtn{display:none!important}
+
+/* ══ Sub-pages (subjects · chapters · units · lectures): header = small label above a big title ══ */
+.topbar>div[style*="flex:1"]{display:flex;flex-direction:column;gap:2px}
+.topbar-sub{order:-1;font-size:12px;font-weight:600;color:var(--text2)}
+.topbar-title{font-family:var(--font-head);font-size:24px;font-weight:800;letter-spacing:-.5px;line-height:1.1;color:var(--text)}
+#page-chapters .sec-label{display:none}
+.chp-sum{padding:18px 20px;border-radius:26px;background:var(--ink);color:#F4F1EA;margin-bottom:16px}
+.chp-sum-top{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.chp-sum-top b{font-family:var(--font-head);font-size:30px;font-weight:800;letter-spacing:-.5px;color:var(--lime)}
+.chp-sum-top span{font-size:12px;font-weight:600;color:#B5AFA2}
+.chp-sum-bar{margin-top:12px;height:6px;border-radius:3px;background:#35322A;overflow:hidden}
+.chp-sum-bar>i{display:block;height:100%;border-radius:3px;background:var(--lime)}
+.chap-name,.row-name{font-size:15px;font-weight:700}
+.chap-sub,.row-sub{font-weight:600}
+.row-icon{color:#17150F;font-size:20px;border:0}
+
+/* ══ Rewards · Spin & Earn (design) ═════════════════════════════════════════════ */
+#page-earn .page-header{align-items:center;gap:12px}
+.rw-head{flex:1;min-width:0}
+.rw-sub{font-size:12px;font-weight:600;color:var(--text2)}
+.rw-h1{margin:0;font-family:var(--font-head);font-size:30px;font-weight:800;letter-spacing:-.5px;line-height:1.1;color:var(--text)}
+.rw-timer{display:flex;align-items:center;gap:6px;height:40px;padding:0 14px;border-radius:20px;background:var(--surface);font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;flex-shrink:0}
+.rw-stack{padding:8px 16px 16px;display:flex;flex-direction:column;gap:16px}
+.sp-card{padding:28px 20px 20px;border-radius:28px;border:0!important}
+body.light-mode .spin-btn{background:var(--ink);color:var(--lime)!important}
+.rw-ad{display:flex;align-items:center;gap:12px;width:100%;height:68px;padding:0 18px;border:0;border-radius:22px;background:#CFE6F5;color:#17150F;font-family:inherit;text-align:left;cursor:pointer}
+.rw-ad i{font-size:24px}
+.rw-ad span{flex:1}
+.rw-ad b{display:block;font-size:15px;font-weight:700}
+.rw-ad small{display:block;font-size:12px;font-weight:500;color:#4A463D}
+.rw-ref{padding:18px;border-radius:26px;background:var(--ink);color:#F4F1EA}
+.rw-ref-t{font-family:var(--font-head);font-size:20px;font-weight:800}
+.rw-ref-s{margin-top:4px;font-size:13px;color:#B5AFA2}
+.rw-ref-row{margin-top:14px;display:flex;gap:10px}
+.rw-ref-code{flex:1;min-width:0;display:flex;align-items:center;height:44px;padding:0 14px;border-radius:14px;border:1px dashed #5A564B;font-size:14px;font-weight:700;letter-spacing:1px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.rw-ref-row button{height:44px;padding:0 20px;border:0;border-radius:22px;background:var(--lime);color:var(--ink);font-family:inherit;font-size:14px;font-weight:700;cursor:pointer}
+
+/* ══ Admin panel = dashboard (design) in front of the existing forms ═════════════ */
+#adminModal .modal-title{display:none}
+#adminModal .tabs{display:none!important}                 /* kept in the DOM: switchTab() toggles it */
+#adminModal.ad-dash .tab-content{display:none!important}
+#adminModal.ad-form #adminDash,#adminModal.ad-dash #adminFormHead{display:none}
+#adminDash{display:flex;flex-direction:column;gap:12px;padding-top:4px}
+.ad-top{display:flex;align-items:center;gap:12px;margin-bottom:4px;padding-right:52px}
+.ad-h1{flex:1;margin:0;font-family:var(--font-head);font-size:28px;font-weight:800;letter-spacing:-.5px}
+.ad-role{padding:7px 14px;border-radius:18px;background:#17150F;color:var(--lime);font-size:12px;font-weight:700}
+.ad-lbl{margin-top:6px;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text2)}
+.ad-p{width:36px;height:36px;border-radius:12px;background:rgba(23,21,15,.1);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:18px;color:#17150F}
+.ad-p-lg{width:44px;height:44px;border-radius:14px;font-size:22px}
+.ad-big{display:flex;align-items:center;gap:12px;width:100%;height:84px;padding:0 16px;border:0;border-radius:22px;background:var(--lime);color:#17150F;text-align:left;font-family:inherit;cursor:pointer}
+.ad-big-t{flex:1;display:flex;flex-direction:column}
+.ad-big-t b{font-size:17px;font-weight:700}
+.ad-big-t small{font-size:12px;font-weight:500;color:#3F4A12}
+.ad-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.ad-k{display:flex;align-items:center;gap:12px;height:76px;padding:0 16px;border:0;border-radius:22px;color:#17150F;font-family:inherit;font-size:15px;font-weight:700;text-align:left;cursor:pointer}
+.ad-rows{display:flex;flex-direction:column;gap:12px}
+.ad-r{display:flex;align-items:center;gap:12px;width:100%;height:60px;padding:0 16px;border:1px solid var(--border);border-radius:20px;background:var(--surface);color:var(--text);font-family:inherit;font-size:15px;font-weight:700;text-align:left;cursor:pointer;box-sizing:border-box}
+.ad-r .ad-p{background:var(--surface3);color:var(--text)}
+.ad-r-t{flex:1}
+.ad-r>i:last-child{color:var(--text3);font-size:18px}
+.ad-head{display:flex;align-items:center;gap:12px;margin:0 0 14px;padding-right:52px}
+.ad-back{width:44px;height:44px;border:0;border-radius:50%;background:var(--surface);color:var(--text);font-size:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:pointer}
+.ad-sub{font-size:12px;font-weight:600;color:var(--text2)}
+.ad-h2{margin:0;font-family:var(--font-head);font-size:24px;font-weight:800;letter-spacing:-.5px;line-height:1.1}
