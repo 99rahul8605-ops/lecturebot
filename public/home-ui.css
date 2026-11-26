@@ -80,3 +80,16 @@ body:not(.light-mode) .hm-streak,body:not(.light-mode) .hm-chip,body:not(.light-
 .hm-strip-t{flex:1;min-width:0;display:flex;flex-direction:column}
 .hm-strip-t b{font-size:15px;font-weight:700}
 .hm-strip-t small{font-size:12px;font-weight:500;color:#3F4A12}
+
+/* Free / Premium / Saved = classic cards with the batch image (same _batchCard markup as before) */
+.bt-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:0}
+.bt-grid .batch-card:first-child{grid-column:auto}                   /* all cards the same size here */
+.bt-grid .batch-img,.bt-grid .batch-card:first-child .batch-img{height:112px}
+.bt-grid .batch-img img{width:100%;height:100%;object-fit:cover}
+
+/* daily motivation card */
+.hm-quote{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:22px;background:var(--surface);border:1px solid var(--border)}
+.hm-q-ic{flex-shrink:0;width:36px;height:36px;border-radius:12px;background:var(--lime);color:var(--ink);display:flex;align-items:center;justify-content:center;font-size:18px}
+.hm-q-b{flex:1;min-width:0}
+.hm-q-l{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text2)}
+.hm-q-t{margin-top:3px;font-size:15px;font-weight:600;line-height:1.4;color:var(--text);word-break:break-word}

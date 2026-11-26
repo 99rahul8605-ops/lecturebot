@@ -1,5 +1,12 @@
 # EduBot update: Study tab, multi-select lectures, new backend
 
+## Update 10: image cards on Free / Premium / Saved + daily motivation
+* Home "All" stays bento tiles. **Free, Premium and Saved** now show the classic cards WITH the batch image
+  (the app's original `_batchCard`: image, heart, premium badge, lock overlay, Buy / Free Redeem / View Demo), 2 per row.
+* **Aaj ka motivation** card on Home: `public/quotes.js` holds 97 original lines (not attributed to anyone).
+  One line per IST day, the same for every student, chosen automatically by the date; every line is shown once
+  before any repeats and it rolls over at 00:00 IST. To add lines just append strings to the array.
+
 ## Update 9: Study > Timer layout broken (page turned into a row)
 The dark Timer mode used the page class `st-dark`, which already existed in `study.css` as the *dark card* component
 (`flex-direction:row; background:ink ...`). It matched `#page-study` and turned the whole page into a row: the header

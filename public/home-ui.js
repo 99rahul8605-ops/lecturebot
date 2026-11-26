@@ -106,8 +106,12 @@
     var pool = visible.filter(function (b) {
       return filter === 'free' ? !b.isPremium : filter === 'premium' ? b.isPremium === true : filter === 'favorite' ? favs.indexOf(b._id) >= 0 : true;
     });
+    // "All" = bento tiles. Free / Premium / Saved = the classic cards WITH the batch image.
+    var cards = filter !== 'all' && typeof _batchCard === 'function';
     var html = pool.length
-      ? layout(pool.map(function (b) { return { b: b, locked: isLocked(b) }; }))
+      ? (cards
+          ? '<div class="batch-grid bt-grid">' + pool.map(function (b) { return _batchCard(b, isLocked(b)); }).join('') + '</div>'
+          : layout(pool.map(function (b) { return { b: b, locked: isLocked(b) }; })))
       : '<div class="empty"><i class="ti ' + EMPTY[filter][0] + '"></i>' + EMPTY[filter][1] + '</div>';
     if (html !== lastHtml) { el.innerHTML = html; lastHtml = html; }          // the list auto-refreshes every 5s: only touch the DOM on change
   };
@@ -167,6 +171,28 @@
     var c = H.continueInfo();
     if (c) openChapter(c.bid, c.sid, c.cid); else switchNavTab('study');
   };
+
+  // ── daily motivation: one line per IST day, the same for everyone, no admin work ─────────────
+  function istDayNumber() { return Math.floor((Date.now() + 5.5 * 3600 * 1000) / 86400000); }
+  // day * step (mod N) walks through the whole list without repeating until every line has been shown
+  H.quoteOfDay = function (dayNum) {
+    var q = window.EDUBOT_QUOTES || []; if (!q.length) return '';
+    var steps = [37, 41, 43, 47], step = 37;
+    for (var i = 0; i < steps.length; i++) if (q.length % steps[i] !== 0) { step = steps[i]; break; }
+    var d = dayNum == null ? istDayNumber() : dayNum;
+    return q[((d * step) % q.length + q.length) % q.length];
+  };
+  H.paintQuote = function () {
+    var el = $('hmQuote'); if (!el) return;
+    var text = H.quoteOfDay();
+    if (!text) { el.style.display = 'none'; return; }
+    var html = '<span class="hm-q-ic"><i class="ti ti-quote"></i></span><div class="hm-q-b"><div class="hm-q-l">Aaj ka motivation</div><div class="hm-q-t">' + esc(text) + '</div></div>';
+    if (el.getAttribute('data-q') !== text) { el.innerHTML = html; el.setAttribute('data-q', text); }
+    el.style.display = '';
+  };
+  H.paintQuote();
+  setInterval(H.paintQuote, 5 * 60 * 1000);                                  // rolls over after midnight IST even if the app stays open
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) H.paintQuote(); });
 
   setFilterState('all');
 })();
